@@ -3,7 +3,7 @@
     <el-card class="login-card">
       <template #header>
         <div class="card-header">
-          <h1>LOL选手拍卖系统</h1>
+          <h1>YPL选手拍卖系统</h1>
         </div>
       </template>
       <el-form :model="loginForm" :rules="rules" ref="loginFormRef" label-width="80px">
