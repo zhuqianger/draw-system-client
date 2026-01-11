@@ -31,3 +31,10 @@ export const activateSession = (sessionId) => {
     method: 'post'
   })
 }
+
+export const deleteSession = (sessionId) => {
+  return request({
+    url: `/session/${sessionId}`,
+    method: 'delete'
+  })
+}

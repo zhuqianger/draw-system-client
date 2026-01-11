@@ -31,17 +31,27 @@
           :key="session.id"
           class="session-card"
           shadow="hover"
-          @click="enterSession(session.id)"
         >
           <template #header>
             <div class="session-header">
-              <h3>{{ session.sessionName }}</h3>
-              <el-tag :type="getStatusType(session.status)" size="large">
-                {{ getStatusText(session.status) }}
-              </el-tag>
+              <h3 @click="enterSession(session.id)" class="session-title">{{ session.sessionName }}</h3>
+              <div class="header-right">
+                <el-tag :type="getStatusType(session.status)" size="large">
+                  {{ getStatusText(session.status) }}
+                </el-tag>
+                <el-button
+                  v-if="isAdmin"
+                  type="danger"
+                  :icon="Delete"
+                  size="small"
+                  circle
+                  @click.stop="handleDelete(session)"
+                  style="margin-left: 10px;"
+                />
+              </div>
             </div>
           </template>
-          <div class="session-info">
+          <div class="session-info" @click="enterSession(session.id)">
             <p><el-icon><Calendar /></el-icon> 创建时间：{{ formatDate(session.createTime) }}</p>
             <p v-if="session.dataSourceFile">
               <el-icon><Document /></el-icon> 数据文件：已上传
@@ -81,7 +91,7 @@
             v-model="createForm.captainIndices"
             placeholder="请输入队长序号，用逗号分隔，如：1,2,3"
           />
-          <div class="form-tip">例如：1,2,3 表示第1、2、3列为队长信息</div>
+          <div class="form-tip">例如：1,3,5 表示表格内1,3,5为队长，并且依次为1、2、3号队伍队长</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -95,9 +105,9 @@
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { Plus, Calendar, Document, Upload, Trophy, User, SwitchButton } from '@element-plus/icons-vue'
-import { getSessionList, createSession } from '../api/session'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Calendar, Document, Upload, Trophy, User, SwitchButton, Delete } from '@element-plus/icons-vue'
+import { getSessionList, createSession, deleteSession } from '../api/session'
 
 const router = useRouter()
 const sessionList = ref([])
@@ -202,6 +212,32 @@ const handleLogout = () => {
   localStorage.removeItem('token')
   localStorage.removeItem('userInfo')
   router.push('/login')
+}
+
+const handleDelete = (session) => {
+  ElMessageBox.confirm(
+    `确定要删除拍卖流程"${session.sessionName}"吗？删除后将标记该拍卖流程为结束状态`,
+    '删除确认',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    }
+  ).then(async () => {
+    try {
+      const res = await deleteSession(session.id)
+      if (res.code === 200) {
+        ElMessage.success('删除成功')
+        loadSessionList()
+      } else {
+        ElMessage.error(res.message || '删除失败')
+      }
+    } catch (error) {
+      ElMessage.error(error.response?.data?.message || '删除失败')
+    }
+  }).catch(() => {
+    // 用户取消删除，不做任何操作
+  })
 }
 
 const getStatusType = (status) => {
@@ -375,7 +411,7 @@ onMounted(() => {
   gap: 20px;
 }
 
-.session-header h3 {
+.session-title {
   margin: 0;
   color: #ffd700;
   font-size: 26px;
@@ -387,6 +423,14 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  cursor: pointer;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
 .session-header :deep(.el-tag) {
