@@ -20,9 +20,9 @@
     </div>
 
     <div class="page-main">
-      <el-row :gutter="30">
+      <el-row :gutter="20" style="flex: 1; overflow: hidden; display: flex;">
         <!-- 左侧：当前拍卖和竞价记录 -->
-        <el-col :span="16">
+        <el-col :span="16" style="display: flex; flex-direction: column; overflow: hidden;">
           <el-card class="auction-card" shadow="hover">
             <template #header>
               <div class="card-header">
@@ -58,7 +58,7 @@
             <div v-if="currentAuction" class="auction-content">
               <div class="player-info">
                 <div class="player-avatar">
-                  <el-avatar :size="120" :icon="User" />
+                  <el-avatar :size="80" :icon="User" />
                 </div>
                 <div class="player-details">
                   <h3>{{ currentAuction.playerName || currentAuction.playerGroupName || '未知' }}</h3>
@@ -137,44 +137,46 @@
           </el-card>
 
           <!-- 竞价历史 -->
-          <el-card class="bids-card" shadow="hover" style="margin-top: 30px">
+          <el-card class="bids-card" shadow="hover" style="margin-top: 15px; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
             <template #header>
               <div class="card-title">
-                <el-icon :size="24"><List /></el-icon>
+                <el-icon :size="20"><List /></el-icon>
                 <span>竞价记录</span>
               </div>
             </template>
-            <el-timeline>
-              <el-timeline-item
-                v-for="(bid, index) in bidHistory"
-                :key="index"
-                :timestamp="formatDateTime(bid.bidTime)"
-                placement="top"
-                size="large"
-              >
-                <el-card shadow="hover" class="bid-card">
-                  <div class="bid-item">
-                    <div class="bid-team-name">{{ bid.teamName || '未知队伍' }}</div>
-                    <div class="bid-amount-large">¥{{ bid.amount }}</div>
-                    <el-tag v-if="bid.isWinner" type="success" size="large">获胜</el-tag>
-                  </div>
-                </el-card>
-              </el-timeline-item>
-            </el-timeline>
-            <el-empty v-if="bidHistory.length === 0" description="暂无竞价记录" :image-size="100" />
+            <div style="flex: 1; overflow-y: auto; min-height: 0;">
+              <el-timeline>
+                <el-timeline-item
+                  v-for="(bid, index) in bidHistory"
+                  :key="index"
+                  :timestamp="formatDateTime(bid.bidTime)"
+                  placement="top"
+                  size="default"
+                >
+                  <el-card shadow="hover" class="bid-card">
+                    <div class="bid-item">
+                      <div class="bid-team-name">{{ bid.teamName || '未知队伍' }}</div>
+                      <div class="bid-amount-large">¥{{ bid.amount }}</div>
+                      <el-tag v-if="bid.isWinner" type="success" size="small">获胜</el-tag>
+                    </div>
+                  </el-card>
+                </el-timeline-item>
+              </el-timeline>
+              <el-empty v-if="bidHistory.length === 0" description="暂无竞价记录" :image-size="80" />
+            </div>
           </el-card>
         </el-col>
 
         <!-- 右侧：队伍信息和待拍卖池 -->
-        <el-col :span="8">
-          <el-card class="teams-card" shadow="hover">
+        <el-col :span="8" style="display: flex; flex-direction: column; overflow: hidden;">
+          <el-card class="teams-card" shadow="hover" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
             <template #header>
               <div class="card-title">
-                <el-icon :size="24"><UserFilled /></el-icon>
+                <el-icon :size="20"><UserFilled /></el-icon>
                 <span>队伍信息</span>
               </div>
             </template>
-            <div class="teams-list">
+            <div class="teams-list" style="flex: 1; overflow-y: auto; min-height: 0;">
               <div
                 v-for="(team, index) in teams"
                 :key="team.id"
@@ -204,24 +206,24 @@
           </el-card>
 
           <!-- 待拍卖池 -->
-          <el-card class="pool-card" shadow="hover" style="margin-top: 30px">
+          <el-card class="pool-card" shadow="hover" style="margin-top: 15px; flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 200px;">
             <template #header>
               <div class="card-title">
-                <el-icon :size="24"><Box /></el-icon>
+                <el-icon :size="20"><Box /></el-icon>
                 <span>待拍卖池</span>
-                <el-tag size="large" type="info">{{ poolPlayers.length }}</el-tag>
+                <el-tag size="small" type="info">{{ poolPlayers.length }}</el-tag>
               </div>
             </template>
-            <div class="pool-list">
-              <el-tag
-                v-for="player in poolPlayers"
-                :key="player.id"
-                class="pool-item"
-                size="large"
-              >
-                {{ player.groupName || player.gameId }}
-              </el-tag>
-              <el-empty v-if="poolPlayers.length === 0" description="待拍卖池为空" :image-size="100" />
+            <div class="pool-list" style="flex: 1; overflow-y: auto; min-height: 0;">
+                  <el-tag
+                    v-for="player in poolPlayers"
+                    :key="player.id"
+                    class="pool-item"
+                    size="small"
+                  >
+                    {{ player.groupName || player.gameId }}
+                  </el-tag>
+              <el-empty v-if="poolPlayers.length === 0" description="待拍卖池为空" :image-size="80" />
             </div>
           </el-card>
         </el-col>
@@ -255,7 +257,6 @@ const drawing = ref(false)
 const finishing = ref(false)
 const timeLeft = ref(0)
 let timer = null
-let refreshTimer = null
 
 const userInfo = computed(() => {
   const info = localStorage.getItem('userInfo')
@@ -466,19 +467,9 @@ onMounted(() => {
   loadAuctionData()
   loadTeams()
   loadPoolPlayers()
-  
-  // 定时刷新数据
-  refreshTimer = setInterval(() => {
-    loadAuctionData()
-    loadTeams()
-    loadPoolPlayers()
-  }, 5000)
 })
 
 onUnmounted(() => {
-  if (refreshTimer) {
-    clearInterval(refreshTimer)
-  }
   if (timer) {
     clearInterval(timer)
   }
@@ -591,10 +582,12 @@ onUnmounted(() => {
 }
 
 .auction-card, .bids-card, .teams-card, .pool-card {
-  border-radius: 16px;
+  border-radius: 12px;
   background: rgba(255, 255, 255, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.2);
   transition: all 0.3s;
+  display: flex;
+  flex-direction: column;
 }
 
 .auction-card:hover, .bids-card:hover, .teams-card:hover, .pool-card:hover {
@@ -611,8 +604,8 @@ onUnmounted(() => {
 .card-title {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 20px;
+  gap: 8px;
+  font-size: 16px;
   font-weight: 700;
   color: #0d2d53;
   letter-spacing: 0.5px;
@@ -626,7 +619,8 @@ onUnmounted(() => {
 :deep(.el-card__header) {
   background: linear-gradient(135deg, #0d2d53 0%, #001428 100%);
   border-bottom: 2px solid rgba(255, 215, 0, 0.3);
-  padding: 28px 36px;
+  padding: 16px 20px;
+  flex-shrink: 0;
 }
 
 :deep(.el-card__header .card-title) {
@@ -635,7 +629,12 @@ onUnmounted(() => {
 }
 
 :deep(.el-card__body) {
-  padding: 36px;
+  padding: 20px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .auction-content {
@@ -644,9 +643,9 @@ onUnmounted(() => {
 
 .player-info {
   display: flex;
-  gap: 40px;
+  gap: 24px;
   align-items: flex-start;
-  margin-bottom: 30px;
+  margin-bottom: 20px;
 }
 
 .player-avatar {
@@ -654,44 +653,44 @@ onUnmounted(() => {
 }
 
 .player-details h3 {
-  margin: 0 0 20px 0;
-  font-size: 28px;
+  margin: 0 0 12px 0;
+  font-size: 20px;
   color: #333;
   font-weight: 700;
 }
 
 .player-meta {
-  margin-bottom: 20px;
+  margin-bottom: 12px;
   display: flex;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .player-stats {
   color: #606266;
-  line-height: 2;
-  font-size: 16px;
+  line-height: 1.6;
+  font-size: 14px;
 }
 
 .player-stats p {
-  margin: 12px 0;
+  margin: 6px 0;
 }
 
 .auction-status {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 28px;
+  padding: 16px;
   background: linear-gradient(135deg, #f5f7fa 0%, #e4e7ed 100%);
-  border-radius: 12px;
-  margin: 30px 0;
+  border-radius: 8px;
+  margin: 15px 0;
 }
 
 .time-info {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 20px;
+  gap: 8px;
+  font-size: 16px;
   color: #333;
   font-weight: 600;
 }
@@ -716,10 +715,10 @@ onUnmounted(() => {
 }
 
 .bid-amount {
-  font-size: 40px;
+  font-size: 28px;
   font-weight: 700;
   color: #f56c6c;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .bid-team {
@@ -728,10 +727,10 @@ onUnmounted(() => {
 }
 
 .bid-section {
-  padding: 28px;
+  padding: 16px;
   background: linear-gradient(135deg, #fff7e6 0%, #ffecc7 100%);
-  border-radius: 12px;
-  margin-top: 30px;
+  border-radius: 8px;
+  margin-top: 15px;
   border: 2px solid rgba(255, 215, 0, 0.3);
 }
 
@@ -768,13 +767,13 @@ onUnmounted(() => {
 .teams-list {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
 }
 
 .team-item {
-  padding: 24px;
+  padding: 16px;
   background: linear-gradient(135deg, #f5f7fa 0%, #ffffff 100%);
-  border-radius: 12px;
+  border-radius: 8px;
   border: 2px solid transparent;
   transition: all 0.3s;
 }
@@ -800,14 +799,14 @@ onUnmounted(() => {
 .team-header h4 {
   margin: 0;
   color: #333;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
 }
 
 .team-captain {
-  font-size: 14px;
+  font-size: 12px;
   color: #666;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 
 .team-players {
@@ -827,21 +826,19 @@ onUnmounted(() => {
 }
 
 .pool-list {
-  max-height: 500px;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   padding: 4px;
 }
 
 .pool-item {
-  padding: 12px 16px;
+  padding: 8px 12px;
   background: linear-gradient(135deg, #f5f7fa 0%, #ffffff 100%);
-  border-radius: 8px;
+  border-radius: 6px;
   transition: all 0.2s;
   cursor: pointer;
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .pool-item:hover {
@@ -850,7 +847,7 @@ onUnmounted(() => {
 }
 
 :deep(.el-divider) {
-  margin: 30px 0;
+  margin: 15px 0;
   border-color: rgba(13, 45, 83, 0.1);
 }
 
