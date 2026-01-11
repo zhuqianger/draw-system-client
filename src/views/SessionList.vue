@@ -117,7 +117,7 @@ const uploadRef = ref()
 const createFormRef = ref()
 
 const userInfo = computed(() => {
-  const info = localStorage.getItem('userInfo')
+  const info = sessionStorage.getItem('userInfo')
   return info ? JSON.parse(info) : null
 })
 
@@ -209,8 +209,8 @@ const enterSession = (sessionId) => {
 }
 
 const handleLogout = () => {
-  localStorage.removeItem('token')
-  localStorage.removeItem('userInfo')
+  sessionStorage.removeItem('token')
+  sessionStorage.removeItem('userInfo')
   router.push('/login')
 }
 

@@ -242,6 +242,7 @@ import {
 import { getSession } from '../api/session'
 import { placeBid, getCurrentAuction, getBids, startAuction, finishAuction } from '../api/auction'
 import { getPoolPlayers, getTeams } from '../api/player'
+import { connectWebSocket, disconnectWebSocket } from '../utils/websocket'
 
 const route = useRoute()
 const router = useRouter()
@@ -259,7 +260,7 @@ const timeLeft = ref(0)
 let timer = null
 
 const userInfo = computed(() => {
-  const info = localStorage.getItem('userInfo')
+  const info = sessionStorage.getItem('userInfo')
   return info ? JSON.parse(info) : null
 })
 
@@ -462,17 +463,70 @@ const formatDateTime = (dateStr) => {
   return date.toLocaleString('zh-CN')
 }
 
+// WebSocket回调函数
+const handleAuctionUpdate = (data) => {
+  // 拍卖开始或结束
+  ElMessage.info(data.message || '拍卖状态更新')
+  loadAuctionData()
+  loadTeams()
+  loadPoolPlayers()
+}
+
+const handleBidUpdate = (data) => {
+  // 有新竞价
+  if (currentAuction.value) {
+    loadAuctionData()
+    loadBidHistory(currentAuction.value.id)
+  }
+}
+
+const handlePlayerAssigned = (data) => {
+  // 队员已分配
+  ElMessage.success(data.message || '队员已分配')
+  loadAuctionData()
+  loadTeams()
+  loadPoolPlayers()
+}
+
+const handleSystemStatusUpdate = (status) => {
+  // 系统状态更新（包含完整数据）
+  if (status.currentAuction) {
+    currentAuction.value = status.currentAuction
+    if (currentAuction.value.endTime) {
+      updateTimeLeft()
+    }
+    if (currentAuction.value.id) {
+      loadBidHistory(currentAuction.value.id)
+    }
+  } else {
+    currentAuction.value = null
+  }
+  // 可以更新teams和poolPlayers，但为了保持sessionId过滤，还是调用API
+  loadTeams()
+  loadPoolPlayers()
+}
+
 onMounted(() => {
   loadSessionInfo()
   loadAuctionData()
   loadTeams()
   loadPoolPlayers()
+
+  // 连接WebSocket
+  connectWebSocket(sessionId, {
+    onAuctionUpdate: handleAuctionUpdate,
+    onBidUpdate: handleBidUpdate,
+    onPlayerAssigned: handlePlayerAssigned,
+    onSystemStatusUpdate: handleSystemStatusUpdate
+  })
 })
 
 onUnmounted(() => {
   if (timer) {
     clearInterval(timer)
   }
+  // 断开WebSocket连接
+  disconnectWebSocket()
 })
 </script>
 

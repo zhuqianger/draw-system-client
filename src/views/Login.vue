@@ -92,8 +92,8 @@ const handleLogin = async () => {
       try {
         const res = await login(loginForm)
         if (res.code === 200) {
-          localStorage.setItem('token', res.data.token)
-          localStorage.setItem('userInfo', JSON.stringify(res.data))
+          sessionStorage.setItem('token', res.data.token)
+          sessionStorage.setItem('userInfo', JSON.stringify(res.data))
           ElMessage.success('登录成功')
           router.push('/sessions')
         } else {
