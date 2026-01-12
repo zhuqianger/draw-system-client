@@ -142,15 +142,33 @@
                 </div>
                 <el-form :model="bidForm" inline class="bid-form">
                   <el-form-item label="出价金额">
-                    <el-input-number
-                      v-model="bidForm.amount"
-                      :min="minBidAmount"
-                      :max="Math.min(currentAuction.maxPrice || Infinity, myTeam?.nowCost || Infinity)"
-                      :precision="2"
-                      :step="0.5"
-                      size="large"
-                      style="width: 220px"
-                    />
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <el-button
+                        circle
+                        size="small"
+                        @click="decreaseBid"
+                        :icon="Minus"
+                        style="flex-shrink: 0;"
+                      />
+                      <el-input-number
+                        v-model="bidForm.amount"
+                        :min="minBidAmount"
+                        :max="maxBidAmount"
+                        :precision="1"
+                        :step="0.5"
+                        size="large"
+                        style="width: 180px"
+                        @blur="adjustBidAmount"
+                        @change="adjustBidAmount"
+                      />
+                      <el-button
+                        circle
+                        size="small"
+                        @click="increaseBid"
+                        :icon="Plus"
+                        style="flex-shrink: 0;"
+                      />
+                    </div>
                   </el-form-item>
                   <el-form-item>
                     <el-button
@@ -166,12 +184,12 @@
                   </el-form-item>
                 </el-form>
                 <div class="bid-tip">
-                  <div>起拍价：¥{{ currentAuction.startingPrice?.toFixed(2) || '0.00' }}，最高价：¥{{ currentAuction.maxPrice?.toFixed(2) || '0.00' }}</div>
+                  <div>费用下限（起拍价）：¥{{ currentAuction.startingPrice?.toFixed(2) || '0.00' }}，费用上限（基础定价+3）：¥{{ currentAuction.maxPrice?.toFixed(2) || '0.00' }}</div>
                   <div v-if="currentAuction.highestBidAmount">当前最高价：¥{{ currentAuction.highestBidAmount.toFixed(2) }}，最低出价：¥{{ minBidAmount.toFixed(2) }}</div>
-                  <div v-else>最低出价：¥{{ minBidAmount.toFixed(2) }}</div>
-                  <div style="margin-top: 5px;">每次加价最少0.5</div>
+                  <div v-else>最低出价（起拍价）：¥{{ minBidAmount.toFixed(2) }}</div>
+                  <div style="margin-top: 5px;">出价必须是0.5的倍数，每次加价最少0.5</div>
                   <div v-if="myTeam && myTeam.nowCost !== null && myTeam.nowCost !== undefined" style="margin-top: 5px;">
-                    出价不能超过剩余费用（剩余：¥{{ myTeam.nowCost.toFixed(2) }}）
+                    剩余费用：¥{{ myTeam.nowCost.toFixed(2) }}，最高可出：¥{{ maxBidAmount.toFixed(1) }}（受费用上限和剩余费用限制）
                   </div>
                   <div v-if="myTeam" style="margin-top: 5px; color: #f56c6c;">
                     剩余费用必须≥还差的队员数（还需：{{ 4 - myTeam.playerCount }}个队员，剩余：¥{{ myTeam.nowCost?.toFixed(2) || '0.00' }}）
@@ -336,7 +354,9 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowLeft, Trophy, User, Clock, List, UserFilled, Box, Refresh, CircleClose, Money, Download, VideoPlay
+  ArrowLeft, Trophy, User, Clock, List, UserFilled, Box, Refresh, CircleClose, Money, Download, VideoPlay,
+  Plus,
+  Minus
 } from '@element-plus/icons-vue'
 import { getSession } from '../api/session'
 import { placeBid, getCurrentAuction, getBids, createAuction, beginAuction, finishAuction } from '../api/auction'
@@ -391,33 +411,83 @@ const myTeam = computed(() => {
   return teams.value.find(t => t.userId === userInfo.value.userId)
 })
 
-// 计算最低出价
+// 计算最低出价（费用下限：起拍价）
 const minBidAmount = computed(() => {
   if (!currentAuction.value) return 0
+  const startingPrice = currentAuction.value.startingPrice || 0
+  
   if (currentAuction.value.highestBidAmount) {
-    // 如果已有出价，最低出价 = 当前最高价 + 0.5
-    return currentAuction.value.highestBidAmount + 0.5
+    // 如果已有出价，最低出价 = 当前最高价 + 0.5，但不能低于起拍价
+    const minFromHighest = currentAuction.value.highestBidAmount + 0.5
+    return Math.max(minFromHighest, startingPrice)
   } else {
-    // 如果没有出价，最低出价 = 起拍价
-    return currentAuction.value.startingPrice || 0
+    // 如果没有出价，最低出价 = 起拍价（费用下限）
+    return startingPrice
   }
 })
 
+// 计算最高可出价（费用上限：基础定价+3，同时考虑剩余费用）
+const maxBidAmount = computed(() => {
+  // 费用上限：基础定价 + 3（即maxPrice）
+  const maxFromAuction = currentAuction.value?.maxPrice || Infinity
+  
+  if (!myTeam.value || myTeam.value.nowCost === null || myTeam.value.nowCost === undefined) {
+    return maxFromAuction
+  }
+  
+  // 将剩余费用向下取整到0.5的倍数
+  const maxFromCost = Math.floor(myTeam.value.nowCost / 0.5) * 0.5
+  
+  // 取两者中的较小值：剩余费用限制 和 费用上限（基础定价+3）
+  return Math.min(maxFromCost, maxFromAuction)
+})
+
+// 将金额调整为0.5的倍数
+const roundToHalf = (value) => {
+  return Math.round(value * 2) / 2
+}
+
+// 调整出价金额为0.5的倍数
+const adjustBidAmount = () => {
+  if (bidForm.amount !== null && bidForm.amount !== undefined) {
+    bidForm.amount = roundToHalf(bidForm.amount)
+  }
+}
+
+// 外部加号按钮：设置出价为最高价（考虑剩余费用和费用上限）
+const increaseBid = () => {
+  bidForm.amount = roundToHalf(maxBidAmount.value)
+}
+
+// 外部减号按钮：设置出价为最低价（起拍价或当前最高价+0.5）
+const decreaseBid = () => {
+  bidForm.amount = roundToHalf(minBidAmount.value)
+}
+
 const canBid = computed(() => {
-  if (!currentAuction.value || !bidForm.amount) return false
+  if (!currentAuction.value || bidForm.amount === null || bidForm.amount === undefined) return false
   if (currentAuction.value.status !== 'FIRST_PHASE' && currentAuction.value.status !== 'PICKUP_PHASE') return false
   if (timeLeft.value <= 0) return false
   
-  // 检查出价是否低于最低出价
+  // 检查出价是否是0.5的倍数
+  const remainder = Math.abs(bidForm.amount % 0.5)
+  if (remainder > 0.001 && remainder < 0.499) {
+    return false
+  }
+  
+  // 检查出价是否低于最低出价（费用下限：起拍价）
   if (bidForm.amount < minBidAmount.value) return false
   
-  // 检查出价是否超过最高价
-  if (currentAuction.value.maxPrice && bidForm.amount > currentAuction.value.maxPrice) return false
+  // 检查出价是否低于起拍价（费用下限）
+  const startingPrice = currentAuction.value.startingPrice || 0
+  if (bidForm.amount < startingPrice) return false
   
-  // 检查出价是否超过队伍剩余费用
-  if (myTeam.value && myTeam.value.nowCost !== null && myTeam.value.nowCost !== undefined) {
-    if (bidForm.amount > myTeam.value.nowCost) return false
-  }
+  // 检查出价是否超过最高价（费用上限：基础定价+3）
+  const maxPrice = currentAuction.value.maxPrice
+  if (maxPrice !== null && maxPrice !== undefined && bidForm.amount > maxPrice) return false
+  
+  // 检查出价是否超过最高可出价（考虑剩余费用和费用上限）
+  if (bidForm.amount > maxBidAmount.value) return false
   
   // 检查出价后剩余费用是否足够：出价后剩余费用必须 >= 还差的队员数-1（因为出价后要减去这个出价，还要再招remainingSlots-1个队员）
   // 总共需要4个队员（不包括队长），还差 remainingSlots 个队员
