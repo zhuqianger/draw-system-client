@@ -174,7 +174,7 @@
                     出价不能超过剩余费用（剩余：¥{{ myTeam.nowCost.toFixed(2) }}）
                   </div>
                   <div v-if="myTeam" style="margin-top: 5px; color: #f56c6c;">
-                    剩余费用必须≥还差的队员数（还需：{{ 4 - myTeam.playerCount }}人，剩余：¥{{ myTeam.nowCost?.toFixed(2) || '0.00' }}）
+                    剩余费用必须≥还差的队员数（还需：{{ 4 - myTeam.playerCount }}个队员，剩余：¥{{ myTeam.nowCost?.toFixed(2) || '0.00' }}）
                   </div>
                 </div>
               </div>
@@ -420,8 +420,9 @@ const canBid = computed(() => {
   }
   
   // 检查出价后剩余费用是否足够：出价后剩余费用必须 >= 还差的队员数-1（因为出价后要减去这个出价，还要再招remainingSlots-1个队员）
+  // 总共需要4个队员（不包括队长），还差 remainingSlots 个队员
   if (myTeam.value) {
-    const remainingSlots = 4 - myTeam.value.playerCount
+    const remainingSlots = 4 - myTeam.value.playerCount // 还差几个队员（不包括队长）
     if (myTeam.value.nowCost === null || myTeam.value.nowCost === undefined) {
       return false
     }
