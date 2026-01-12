@@ -105,11 +105,13 @@
                   <span v-else-if="currentAuction.status === 'FIRST_PHASE'">
                     <el-tag type="primary" size="large">第一阶段</el-tag>
                     <span v-if="timeLeft > 0" class="time-text" style="margin-left: 10px;">剩余时间：{{ formatTime(timeLeft) }}</span>
+                    <span v-else-if="currentAuction.highestBidAmount && currentAuction.maxPrice && currentAuction.highestBidAmount >= currentAuction.maxPrice" class="time-up" style="color: #67c23a; font-weight: bold; margin-left: 10px;">已出到最高价，等待管理员确认</span>
                     <span v-else class="time-up">第一阶段已结束</span>
                   </span>
                   <span v-else-if="currentAuction.status === 'PICKUP_PHASE'">
                     <el-tag type="warning" size="large">捡漏环节</el-tag>
                     <span v-if="timeLeft > 0" class="time-text" style="margin-left: 10px;">剩余时间：{{ formatTime(timeLeft) }}</span>
+                    <span v-else-if="currentAuction.highestBidAmount && currentAuction.maxPrice && currentAuction.highestBidAmount >= currentAuction.maxPrice" class="time-up" style="color: #67c23a; font-weight: bold; margin-left: 10px;">已出到最高价，等待管理员确认</span>
                     <span v-else class="time-up">捡漏环节已结束</span>
                   </span>
                   <span v-else class="time-up">拍卖已结束</span>
@@ -552,12 +554,13 @@ const handleBeginAuction = async () => {
   }
 }
 
+// 管理员手动结束拍卖
 const handleFinishAuction = async () => {
   if (!currentAuction.value) return
   
   finishing.value = true
   try {
-    const res = await finishAuction(currentAuction.value.id)
+    const res = await finishAuction(currentAuction.value.id, false) // autoFinish=false，管理员手动结束
     if (res.code === 200) {
       if (res.message && res.message.includes('捡漏环节')) {
         ElMessage.success('第一阶段结束，进入捡漏环节')
@@ -577,6 +580,39 @@ const handleFinishAuction = async () => {
   }
 }
 
+// 自动结束拍卖（倒计时结束时调用）
+const handleFinishAuctionAuto = async (silent = false) => {
+  if (!currentAuction.value) return
+  
+  finishing.value = true
+  try {
+    const res = await finishAuction(currentAuction.value.id, true) // autoFinish=true，自动结束
+    if (res.code === 200) {
+      // 如果是自动结束，不弹提示（避免重复提示）
+      if (!silent) {
+        if (res.message && res.message.includes('捡漏环节')) {
+          ElMessage.success('第一阶段结束，进入捡漏环节')
+        } else {
+          ElMessage.success('拍卖已结束')
+        }
+      }
+      loadAuctionData()
+      loadTeams()
+      loadPoolPlayers()
+    } else {
+      if (!silent) {
+        ElMessage.error(res.message || '结束拍卖失败')
+      }
+    }
+  } catch (error) {
+    if (!silent) {
+      ElMessage.error(error.response?.data?.message || '结束拍卖失败')
+    }
+  } finally {
+    finishing.value = false
+  }
+}
+
 const handleBid = async () => {
   if (!canBid.value) {
     ElMessage.warning('出价不符合要求，请检查出价金额')
@@ -590,13 +626,14 @@ const handleBid = async () => {
       amount: bidForm.amount
     })
     if (res.code === 200) {
-      // 如果出到最高价，直接获得该队员
+      // 出价成功
       if (currentAuction.value.maxPrice && bidForm.amount >= currentAuction.value.maxPrice) {
-        ElMessage.success('出价达到最高价，直接获得该队员！')
+        ElMessage.success('出价达到最高价！倒计时已停止，请等待管理员确认结束拍卖')
       } else {
         ElMessage.success('出价成功')
       }
       bidForm.amount = 0
+      // 立即刷新数据，获取更新后的endTime（如果达到最高价，endTime会被设置为当前时间）
       loadAuctionData()
       loadBidHistory(currentAuction.value.id)
       loadTeams() // 更新队伍信息（费用可能变化）
@@ -642,9 +679,16 @@ const updateTimeLeft = () => {
       if (timeLeft.value === 0) {
         clearInterval(timer)
         timer = null
-        // 倒计时结束，自动结束拍卖（如果第一阶段没有出价，会自动进入捡漏环节）
-        if (currentAuction.value?.status === 'FIRST_PHASE' || currentAuction.value?.status === 'PICKUP_PHASE') {
-          handleFinishAuction()
+        // 倒计时结束
+        if (currentAuction.value?.status === 'FIRST_PHASE') {
+          // 第一阶段倒计时结束，自动调用finishAuction（autoFinish=true）
+          // 如果有出价，拍卖结束；如果没有出价，会自动进入捡漏环节
+          handleFinishAuctionAuto(true) // silent=true，不弹提示，避免重复
+        } else if (currentAuction.value?.status === 'PICKUP_PHASE') {
+          // 捡漏环节倒计时结束，只刷新数据，等待管理员手动点击结束拍卖
+          loadAuctionData()
+        } else {
+          loadAuctionData()
         }
       }
     }, 1000)
@@ -690,15 +734,14 @@ const handleExportTeams = async () => {
 
 // WebSocket回调函数
 const handleAuctionUpdate = (data) => {
-  // 拍卖开始或结束
-  ElMessage.info(data.message || '拍卖状态更新')
+  // 拍卖开始或结束 - 不弹提示，只刷新数据（避免重复提示）
   loadAuctionData()
   loadTeams()
   loadPoolPlayers()
 }
 
 const handleBidUpdate = (data) => {
-  // 有新竞价
+  // 有新竞价 - 不弹提示，只刷新数据（避免重复提示）
   if (currentAuction.value) {
     loadAuctionData()
     loadBidHistory(currentAuction.value.id)
@@ -706,8 +749,7 @@ const handleBidUpdate = (data) => {
 }
 
 const handlePlayerAssigned = (data) => {
-  // 队员已分配
-  ElMessage.success(data.message || '队员已分配')
+  // 队员已分配 - 不弹提示，只刷新数据（避免重复提示）
   loadAuctionData()
   loadTeams()
   loadPoolPlayers()

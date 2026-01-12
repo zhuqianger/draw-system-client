@@ -45,9 +45,10 @@ export const startAuction = (sessionId, playerId, duration = 60) => {
   })
 }
 
-export const finishAuction = (auctionId) => {
+export const finishAuction = (auctionId, autoFinish = false) => {
   return request({
     url: `/auction/finish/${auctionId}`,
-    method: 'post'
+    method: 'post',
+    params: { autoFinish }
   })
 }
