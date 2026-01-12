@@ -95,11 +95,23 @@
 
               <!-- 竞价区域（仅队长） -->
               <div v-if="isCaptain && currentAuction.status === 'ACTIVE' && timeLeft > 0" class="bid-section">
-                <el-form :model="bidForm" inline>
+                <div v-if="myTeam" class="team-cost-info">
+                  <el-alert
+                    :type="myTeam.nowCost > 0 ? 'info' : 'warning'"
+                    :closable="false"
+                    show-icon
+                  >
+                    <template #title>
+                      <span>队伍剩余费用：<strong>¥{{ myTeam.nowCost?.toFixed(2) || '0.00' }}</strong></span>
+                    </template>
+                  </el-alert>
+                </div>
+                <el-form :model="bidForm" inline class="bid-form">
                   <el-form-item label="出价金额">
                     <el-input-number
                       v-model="bidForm.amount"
                       :min="(currentAuction.highestBidAmount || 0) + 1"
+                      :max="myTeam?.nowCost || undefined"
                       :precision="2"
                       :step="10"
                       size="large"
@@ -119,7 +131,12 @@
                     </el-button>
                   </el-form-item>
                 </el-form>
-                <div class="bid-tip">出价必须高于当前最高价</div>
+                <div class="bid-tip">
+                  <div>出价必须高于当前最高价</div>
+                  <div v-if="myTeam && myTeam.nowCost !== null && myTeam.nowCost !== undefined" style="margin-top: 5px;">
+                    出价不能超过剩余费用（剩余：¥{{ myTeam.nowCost.toFixed(2) }}）
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -190,6 +207,11 @@
                   </el-tag>
                 </div>
                 <div class="team-captain">队长：{{ team.captainName }}</div>
+                <div class="team-cost" v-if="team.nowCost !== null && team.nowCost !== undefined">
+                  <el-tag type="warning" size="large" style="width: 100%; justify-content: center;">
+                    <span>剩余费用：<strong>¥{{ team.nowCost.toFixed(2) }}</strong></span>
+                  </el-tag>
+                </div>
                 <div class="team-players">
                   <el-tag
                     v-for="player in team.players"
@@ -285,9 +307,19 @@ const sessionStatusText = computed(() => {
   return map[sessionInfo.value?.status] || '未知'
 })
 
+const myTeam = computed(() => {
+  if (!userInfo.value?.userId) return null
+  return teams.value.find(t => t.userId === userInfo.value.userId)
+})
+
 const canBid = computed(() => {
   if (!currentAuction.value || !bidForm.amount) return false
-  return bidForm.amount > (currentAuction.value.highestBidAmount || 0)
+  if (bidForm.amount <= (currentAuction.value.highestBidAmount || 0)) return false
+  // 检查出价是否超过队伍剩余费用
+  if (myTeam.value && myTeam.value.nowCost !== null && myTeam.value.nowCost !== undefined) {
+    if (bidForm.amount > myTeam.value.nowCost) return false
+  }
+  return true
 })
 
 const bidForm = reactive({
@@ -781,11 +813,19 @@ onUnmounted(() => {
 }
 
 .bid-section {
-  padding: 16px;
+  padding: 20px;
   background: linear-gradient(135deg, #fff7e6 0%, #ffecc7 100%);
   border-radius: 8px;
-  margin-top: 15px;
+  margin-top: 16px;
   border: 2px solid rgba(255, 215, 0, 0.3);
+}
+
+.team-cost-info {
+  margin-bottom: 18px;
+}
+
+.bid-form {
+  margin-bottom: 12px;
 }
 
 .bid-tip {
@@ -821,11 +861,12 @@ onUnmounted(() => {
 .teams-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+  padding: 4px;
 }
 
 .team-item {
-  padding: 16px;
+  padding: 18px;
   background: linear-gradient(135deg, #f5f7fa 0%, #ffffff 100%);
   border-radius: 8px;
   border: 2px solid transparent;
@@ -847,7 +888,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .team-header h4 {
@@ -858,15 +899,31 @@ onUnmounted(() => {
 }
 
 .team-captain {
-  font-size: 12px;
+  font-size: 13px;
   color: #666;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.team-cost {
+  margin-bottom: 14px;
+  display: flex;
+  justify-content: center;
+}
+
+.team-cost .el-tag {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  font-size: 14px;
 }
 
 .team-players {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  margin-top: 8px;
 }
 
 .player-tag {
