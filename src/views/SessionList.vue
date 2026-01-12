@@ -216,7 +216,7 @@ const handleLogout = () => {
 
 const handleDelete = (session) => {
   ElMessageBox.confirm(
-    `确定要删除拍卖流程"${session.sessionName}"吗？删除后将标记该拍卖流程为结束状态`,
+    `确定要删除拍卖流程"${session.sessionName}"吗？`,
     '删除确认',
     {
       confirmButtonText: '确定',
