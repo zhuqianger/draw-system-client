@@ -13,6 +13,16 @@
           </h2>
         </div>
         <div class="header-right">
+          <el-button
+            v-if="isAdmin"
+            type="success"
+            :icon="Download"
+            @click="handleExportTeams"
+            :loading="exporting"
+            size="large"
+          >
+            导出队伍信息
+          </el-button>
           <el-tag :type="sessionStatusType" size="large">{{ sessionStatusText }}</el-tag>
           <span class="user-name">{{ userInfo?.username }}</span>
         </div>
@@ -42,7 +52,17 @@
                     摇号抽取
                   </el-button>
                   <el-button
-                    v-if="currentAuction && currentAuction.status === 'ACTIVE'"
+                    v-if="currentAuction && currentAuction.status === 'WAITING'"
+                    type="success"
+                    :icon="VideoPlay"
+                    @click="handleBeginAuction"
+                    :loading="beginning"
+                    size="large"
+                  >
+                    开始拍卖
+                  </el-button>
+                  <el-button
+                    v-if="currentAuction && (currentAuction.status === 'FIRST_PHASE' || currentAuction.status === 'PICKUP_PHASE')"
                     type="danger"
                     :icon="CircleClose"
                     @click="handleFinishAuction"
@@ -81,10 +101,22 @@
               <div class="auction-status">
                 <div class="time-info">
                   <el-icon :size="24"><Clock /></el-icon>
-                  <span v-if="timeLeft > 0" class="time-text">剩余时间：{{ formatTime(timeLeft) }}</span>
+                  <span v-if="currentAuction.status === 'WAITING'" class="time-text">等待管理员开始拍卖</span>
+                  <span v-else-if="currentAuction.status === 'FIRST_PHASE'">
+                    <el-tag type="primary" size="large">第一阶段</el-tag>
+                    <span v-if="timeLeft > 0" class="time-text" style="margin-left: 10px;">剩余时间：{{ formatTime(timeLeft) }}</span>
+                    <span v-else class="time-up">第一阶段已结束</span>
+                  </span>
+                  <span v-else-if="currentAuction.status === 'PICKUP_PHASE'">
+                    <el-tag type="warning" size="large">捡漏环节</el-tag>
+                    <span v-if="timeLeft > 0" class="time-text" style="margin-left: 10px;">剩余时间：{{ formatTime(timeLeft) }}</span>
+                    <span v-else class="time-up">捡漏环节已结束</span>
+                  </span>
                   <span v-else class="time-up">拍卖已结束</span>
                 </div>
                 <div class="highest-bid">
+                  <div class="bid-label">起拍价：¥{{ currentAuction.startingPrice?.toFixed(2) || '0.00' }}</div>
+                  <div class="bid-label">最高价：¥{{ currentAuction.maxPrice?.toFixed(2) || '0.00' }}</div>
                   <div class="bid-label">当前最高价</div>
                   <div class="bid-amount">¥{{ currentAuction.highestBidAmount || 0 }}</div>
                   <div class="bid-team" v-if="currentAuction.highestBidTeamName">
@@ -94,7 +126,7 @@
               </div>
 
               <!-- 竞价区域（仅队长） -->
-              <div v-if="isCaptain && currentAuction.status === 'ACTIVE' && timeLeft > 0" class="bid-section">
+              <div v-if="isCaptain && (currentAuction.status === 'FIRST_PHASE' || currentAuction.status === 'PICKUP_PHASE') && timeLeft > 0" class="bid-section">
                 <div v-if="myTeam" class="team-cost-info">
                   <el-alert
                     :type="myTeam.nowCost > 0 ? 'info' : 'warning'"
@@ -110,10 +142,10 @@
                   <el-form-item label="出价金额">
                     <el-input-number
                       v-model="bidForm.amount"
-                      :min="(currentAuction.highestBidAmount || 0) + 1"
-                      :max="myTeam?.nowCost || undefined"
+                      :min="minBidAmount"
+                      :max="Math.min(currentAuction.maxPrice || Infinity, myTeam?.nowCost || Infinity)"
                       :precision="2"
-                      :step="10"
+                      :step="0.5"
                       size="large"
                       style="width: 220px"
                     />
@@ -132,9 +164,15 @@
                   </el-form-item>
                 </el-form>
                 <div class="bid-tip">
-                  <div>出价必须高于当前最高价</div>
+                  <div>起拍价：¥{{ currentAuction.startingPrice?.toFixed(2) || '0.00' }}，最高价：¥{{ currentAuction.maxPrice?.toFixed(2) || '0.00' }}</div>
+                  <div v-if="currentAuction.highestBidAmount">当前最高价：¥{{ currentAuction.highestBidAmount.toFixed(2) }}，最低出价：¥{{ minBidAmount.toFixed(2) }}</div>
+                  <div v-else>最低出价：¥{{ minBidAmount.toFixed(2) }}</div>
+                  <div style="margin-top: 5px;">每次加价最少0.5</div>
                   <div v-if="myTeam && myTeam.nowCost !== null && myTeam.nowCost !== undefined" style="margin-top: 5px;">
                     出价不能超过剩余费用（剩余：¥{{ myTeam.nowCost.toFixed(2) }}）
+                  </div>
+                  <div v-if="myTeam" style="margin-top: 5px; color: #f56c6c;">
+                    剩余费用必须≥还差的队员数（还需：{{ 4 - myTeam.playerCount }}人，剩余：¥{{ myTeam.nowCost?.toFixed(2) || '0.00' }}）
                   </div>
                 </div>
               </div>
@@ -237,14 +275,51 @@
               </div>
             </template>
             <div class="pool-list" style="flex: 1; overflow-y: auto; min-height: 0;">
-                  <el-tag
-                    v-for="player in poolPlayers"
-                    :key="player.id"
-                    class="pool-item"
-                    size="small"
-                  >
-                    {{ player.groupName || player.gameId }}
-                  </el-tag>
+              <el-tooltip
+                v-for="player in poolPlayers"
+                :key="player.id"
+                placement="right"
+                :show-after="300"
+                :hide-after="0"
+                effect="dark"
+                popper-class="player-tooltip"
+              >
+                <template #content>
+                  <div class="player-tooltip-content">
+                    <div class="tooltip-header">
+                      <h4>{{ player.groupName || player.gameId || '未知' }}</h4>
+                    </div>
+                    <div class="tooltip-body">
+                      <div class="tooltip-item" v-if="player.gameId">
+                        <span class="tooltip-label">游戏ID：</span>
+                        <span class="tooltip-value">{{ player.gameId }}</span>
+                      </div>
+                      <div class="tooltip-item" v-if="player.rank">
+                        <span class="tooltip-label">段位：</span>
+                        <span class="tooltip-value">{{ player.rank }}</span>
+                      </div>
+                      <div class="tooltip-item" v-if="player.position">
+                        <span class="tooltip-label">擅长位置：</span>
+                        <span class="tooltip-value">{{ player.position }}</span>
+                      </div>
+                      <div class="tooltip-item" v-if="player.heroes">
+                        <span class="tooltip-label">自我介绍：</span>
+                        <span class="tooltip-value">{{ player.heroes }}</span>
+                      </div>
+                      <div class="tooltip-item" v-if="player.cost !== null && player.cost !== undefined">
+                        <span class="tooltip-label">费用：</span>
+                        <span class="tooltip-value highlight">¥{{ player.cost.toFixed(2) }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <el-tag
+                  class="pool-item"
+                  size="small"
+                >
+                  {{ player.groupName || player.gameId }}
+                </el-tag>
+              </el-tooltip>
               <el-empty v-if="poolPlayers.length === 0" description="待拍卖池为空" :image-size="80" />
             </div>
           </el-card>
@@ -259,11 +334,11 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowLeft, Trophy, User, Clock, List, UserFilled, Box, Refresh, CircleClose, Money
+  ArrowLeft, Trophy, User, Clock, List, UserFilled, Box, Refresh, CircleClose, Money, Download, VideoPlay
 } from '@element-plus/icons-vue'
 import { getSession } from '../api/session'
-import { placeBid, getCurrentAuction, getBids, startAuction, finishAuction } from '../api/auction'
-import { getPoolPlayers, getTeams } from '../api/player'
+import { placeBid, getCurrentAuction, getBids, createAuction, beginAuction, finishAuction } from '../api/auction'
+import { getPoolPlayers, getTeams, exportTeams } from '../api/player'
 import { connectWebSocket, disconnectWebSocket } from '../utils/websocket'
 
 const route = useRoute()
@@ -277,7 +352,9 @@ const poolPlayers = ref([])
 const bidHistory = ref([])
 const bidding = ref(false)
 const drawing = ref(false)
+const beginning = ref(false)
 const finishing = ref(false)
+const exporting = ref(false)
 const timeLeft = ref(0)
 let timer = null
 
@@ -312,13 +389,46 @@ const myTeam = computed(() => {
   return teams.value.find(t => t.userId === userInfo.value.userId)
 })
 
+// 计算最低出价
+const minBidAmount = computed(() => {
+  if (!currentAuction.value) return 0
+  if (currentAuction.value.highestBidAmount) {
+    // 如果已有出价，最低出价 = 当前最高价 + 0.5
+    return currentAuction.value.highestBidAmount + 0.5
+  } else {
+    // 如果没有出价，最低出价 = 起拍价
+    return currentAuction.value.startingPrice || 0
+  }
+})
+
 const canBid = computed(() => {
   if (!currentAuction.value || !bidForm.amount) return false
-  if (bidForm.amount <= (currentAuction.value.highestBidAmount || 0)) return false
+  if (currentAuction.value.status !== 'FIRST_PHASE' && currentAuction.value.status !== 'PICKUP_PHASE') return false
+  if (timeLeft.value <= 0) return false
+  
+  // 检查出价是否低于最低出价
+  if (bidForm.amount < minBidAmount.value) return false
+  
+  // 检查出价是否超过最高价
+  if (currentAuction.value.maxPrice && bidForm.amount > currentAuction.value.maxPrice) return false
+  
   // 检查出价是否超过队伍剩余费用
   if (myTeam.value && myTeam.value.nowCost !== null && myTeam.value.nowCost !== undefined) {
     if (bidForm.amount > myTeam.value.nowCost) return false
   }
+  
+  // 检查出价后剩余费用是否足够：出价后剩余费用必须 >= 还差的队员数-1（因为出价后要减去这个出价，还要再招remainingSlots-1个队员）
+  if (myTeam.value) {
+    const remainingSlots = 4 - myTeam.value.playerCount
+    if (myTeam.value.nowCost === null || myTeam.value.nowCost === undefined) {
+      return false
+    }
+    const remainingCostAfterBid = myTeam.value.nowCost - bidForm.amount
+    if (remainingSlots > 1 && remainingCostAfterBid < (remainingSlots - 1)) {
+      return false
+    }
+  }
+  
   return true
 })
 
@@ -342,12 +452,21 @@ const loadAuctionData = async () => {
     const res = await getCurrentAuction(sessionId)
     if (res.code === 200 && res.data) {
       currentAuction.value = res.data
+      // 设置出价输入框的初始值为最低出价
+      if (currentAuction.value.startingPrice) {
+        bidForm.amount = currentAuction.value.highestBidAmount 
+          ? currentAuction.value.highestBidAmount + 0.5 
+          : currentAuction.value.startingPrice
+      }
       if (currentAuction.value.endTime) {
         updateTimeLeft()
+      } else {
+        updateTimeLeft() // 即使没有endTime也要更新（处理WAITING状态）
       }
       loadBidHistory(currentAuction.value.id)
     } else {
       currentAuction.value = null
+      bidForm.amount = 0
     }
   } catch (error) {
     console.error('加载拍卖数据失败', error)
@@ -399,9 +518,9 @@ const handleRandomDraw = async () => {
     const randomIndex = Math.floor(Math.random() * poolPlayers.value.length)
     const selectedPlayer = poolPlayers.value[randomIndex]
     
-    const res = await startAuction(sessionId, selectedPlayer.id, 60)
+    const res = await createAuction(sessionId, selectedPlayer.id)
     if (res.code === 200) {
-      ElMessage.success(`已抽取：${selectedPlayer.groupName || selectedPlayer.gameId}`)
+      ElMessage.success(`已抽取：${selectedPlayer.groupName || selectedPlayer.gameId}，等待开始拍卖`)
       loadAuctionData()
       loadPoolPlayers()
     } else {
@@ -414,6 +533,25 @@ const handleRandomDraw = async () => {
   }
 }
 
+const handleBeginAuction = async () => {
+  if (!currentAuction.value) return
+  
+  beginning.value = true
+  try {
+    const res = await beginAuction(currentAuction.value.id)
+    if (res.code === 200) {
+      ElMessage.success('拍卖已开始')
+      loadAuctionData()
+    } else {
+      ElMessage.error(res.message || '开始拍卖失败')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '开始拍卖失败')
+  } finally {
+    beginning.value = false
+  }
+}
+
 const handleFinishAuction = async () => {
   if (!currentAuction.value) return
   
@@ -421,7 +559,11 @@ const handleFinishAuction = async () => {
   try {
     const res = await finishAuction(currentAuction.value.id)
     if (res.code === 200) {
-      ElMessage.success('拍卖已结束')
+      if (res.message && res.message.includes('捡漏环节')) {
+        ElMessage.success('第一阶段结束，进入捡漏环节')
+      } else {
+        ElMessage.success('拍卖已结束')
+      }
       loadAuctionData()
       loadTeams()
       loadPoolPlayers()
@@ -437,7 +579,7 @@ const handleFinishAuction = async () => {
 
 const handleBid = async () => {
   if (!canBid.value) {
-    ElMessage.warning('出价必须高于当前最高价')
+    ElMessage.warning('出价不符合要求，请检查出价金额')
     return
   }
 
@@ -448,10 +590,16 @@ const handleBid = async () => {
       amount: bidForm.amount
     })
     if (res.code === 200) {
-      ElMessage.success('出价成功')
+      // 如果出到最高价，直接获得该队员
+      if (currentAuction.value.maxPrice && bidForm.amount >= currentAuction.value.maxPrice) {
+        ElMessage.success('出价达到最高价，直接获得该队员！')
+      } else {
+        ElMessage.success('出价成功')
+      }
       bidForm.amount = 0
       loadAuctionData()
       loadBidHistory(currentAuction.value.id)
+      loadTeams() // 更新队伍信息（费用可能变化）
     } else {
       ElMessage.error(res.message || '出价失败')
     }
@@ -463,7 +611,24 @@ const handleBid = async () => {
 }
 
 const updateTimeLeft = () => {
-  if (!currentAuction.value?.endTime) return
+  // 如果状态是WAITING，没有倒计时
+  if (currentAuction.value?.status === 'WAITING') {
+    timeLeft.value = 0
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
+    return
+  }
+  
+  if (!currentAuction.value?.endTime) {
+    timeLeft.value = 0
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
+    return
+  }
   
   const endTime = new Date(currentAuction.value.endTime).getTime()
   const now = Date.now()
@@ -477,9 +642,15 @@ const updateTimeLeft = () => {
       if (timeLeft.value === 0) {
         clearInterval(timer)
         timer = null
-        loadAuctionData()
+        // 倒计时结束，自动结束拍卖（如果第一阶段没有出价，会自动进入捡漏环节）
+        if (currentAuction.value?.status === 'FIRST_PHASE' || currentAuction.value?.status === 'PICKUP_PHASE') {
+          handleFinishAuction()
+        }
       }
     }, 1000)
+  } else if (diff <= 0 && timer) {
+    clearInterval(timer)
+    timer = null
   }
 }
 
@@ -493,6 +664,28 @@ const formatDateTime = (dateStr) => {
   if (!dateStr) return ''
   const date = new Date(dateStr)
   return date.toLocaleString('zh-CN')
+}
+
+const handleExportTeams = async () => {
+  exporting.value = true
+  try {
+    const blob = await exportTeams(sessionId)
+    // 创建下载链接
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `队伍信息_${sessionInfo.value?.sessionName || sessionId}_${Date.now()}.xlsx`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('导出成功')
+  } catch (error) {
+    console.error('导出失败', error)
+    ElMessage.error('导出失败：' + (error.response?.data?.message || error.message))
+  } finally {
+    exporting.value = false
+  }
 }
 
 // WebSocket回调函数
@@ -970,5 +1163,65 @@ onUnmounted(() => {
 :deep(.el-empty__description) {
   color: #909399;
   font-size: 16px;
+}
+
+/* 玩家信息悬浮窗样式 */
+:deep(.player-tooltip) {
+  max-width: 300px;
+  padding: 0 !important;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.player-tooltip-content {
+  padding: 12px;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-radius: 8px;
+}
+
+.tooltip-header {
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.tooltip-header h4 {
+  margin: 0;
+  color: #ffd700;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.tooltip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tooltip-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.tooltip-label {
+  color: #909399;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.tooltip-value {
+  color: #ffffff;
+  flex: 1;
+  word-break: break-word;
+}
+
+.tooltip-value.highlight {
+  color: #67c23a;
+  font-weight: 700;
+  font-size: 14px;
 }
 </style>

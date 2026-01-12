@@ -22,6 +22,21 @@ export const getBids = (auctionId) => {
   })
 }
 
+export const createAuction = (sessionId, playerId) => {
+  return request({
+    url: '/auction/create',
+    method: 'post',
+    params: { sessionId, playerId }
+  })
+}
+
+export const beginAuction = (auctionId) => {
+  return request({
+    url: `/auction/begin/${auctionId}`,
+    method: 'post'
+  })
+}
+
 export const startAuction = (sessionId, playerId, duration = 60) => {
   return request({
     url: '/auction/start',

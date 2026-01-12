@@ -13,3 +13,11 @@ export const getTeams = (sessionId) => {
     method: 'get'
   })
 }
+
+export const exportTeams = (sessionId) => {
+  return request({
+    url: `/team/export/${sessionId}`,
+    method: 'get',
+    responseType: 'blob'
+  })
+}
