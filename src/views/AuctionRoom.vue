@@ -663,38 +663,6 @@ const handleFinishAuction = async () => {
   }
 }
 
-// 自动结束拍卖（倒计时结束时调用）
-const handleFinishAuctionAuto = async (silent = false) => {
-  if (!currentAuction.value) return
-  
-  finishing.value = true
-  try {
-    const res = await finishAuction(currentAuction.value.id, true) // autoFinish=true，自动结束
-    if (res.code === 200) {
-      // 如果是自动结束，不弹提示（避免重复提示）
-      if (!silent) {
-        if (res.message && res.message.includes('捡漏环节')) {
-          ElMessage.success('第一阶段结束，进入捡漏环节')
-        } else {
-          ElMessage.success('拍卖已结束')
-        }
-      }
-      loadAuctionData()
-      loadTeams()
-      loadPoolPlayers()
-    } else {
-      if (!silent) {
-        ElMessage.error(res.message || '结束拍卖失败')
-      }
-    }
-  } catch (error) {
-    if (!silent) {
-      ElMessage.error(error.response?.data?.message || '结束拍卖失败')
-    }
-  } finally {
-    finishing.value = false
-  }
-}
 
 const handleBid = async () => {
   if (!canBid.value) {
@@ -759,20 +727,12 @@ const updateTimeLeft = () => {
   if (diff > 0 && !timer) {
     timer = setInterval(() => {
       timeLeft.value = Math.max(0, timeLeft.value - 1)
+      // 倒计时结束后，不发送请求，等待后端定时任务自动处理并通过WebSocket推送
       if (timeLeft.value === 0) {
         clearInterval(timer)
         timer = null
-        // 倒计时结束
-        if (currentAuction.value?.status === 'FIRST_PHASE') {
-          // 第一阶段倒计时结束，自动调用finishAuction（autoFinish=true）
-          // 如果有出价，拍卖结束；如果没有出价，会自动进入捡漏环节
-          handleFinishAuctionAuto(true) // silent=true，不弹提示，避免重复
-        } else if (currentAuction.value?.status === 'PICKUP_PHASE') {
-          // 捡漏环节倒计时结束，只刷新数据，等待管理员手动点击结束拍卖
-          loadAuctionData()
-        } else {
-          loadAuctionData()
-        }
+        // 只刷新数据，等待后端推送状态变化
+        loadAuctionData()
       }
     }, 1000)
   } else if (diff <= 0 && timer) {
@@ -841,10 +801,19 @@ const handlePlayerAssigned = (data) => {
 const handleSystemStatusUpdate = (status) => {
   // 系统状态更新（包含完整数据）
   if (status.currentAuction) {
+    const oldStatus = currentAuction.value?.status
     currentAuction.value = status.currentAuction
+    
+    // 如果状态发生变化，更新倒计时
     if (currentAuction.value.endTime) {
       updateTimeLeft()
     }
+    
+    // 如果从第一阶段进入捡漏环节，更新倒计时
+    if (oldStatus === 'FIRST_PHASE' && currentAuction.value.status === 'PICKUP_PHASE') {
+      updateTimeLeft()
+    }
+    
     if (currentAuction.value.id) {
       loadBidHistory(currentAuction.value.id)
     }
