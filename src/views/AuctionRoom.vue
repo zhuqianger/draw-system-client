@@ -106,19 +106,19 @@
                     <el-tag type="primary" size="large">第一阶段</el-tag>
                     <span v-if="timeLeft > 0" class="time-text" style="margin-left: 10px;">剩余时间：{{ formatTime(timeLeft) }}</span>
                     <span v-else-if="currentAuction.highestBidAmount && currentAuction.maxPrice && currentAuction.highestBidAmount >= currentAuction.maxPrice" class="time-up" style="color: #67c23a; font-weight: bold; margin-left: 10px;">已出到最高价，等待管理员确认</span>
-                    <span v-else class="time-up">第一阶段已结束</span>
+                    <span v-else class="time-up" style="color: #f56c6c; font-weight: bold; margin-left: 10px;">倒计时已结束，等待管理员确认</span>
                   </span>
                   <span v-else-if="currentAuction.status === 'PICKUP_PHASE'">
                     <el-tag type="warning" size="large">捡漏环节</el-tag>
                     <span v-if="timeLeft > 0" class="time-text" style="margin-left: 10px;">剩余时间：{{ formatTime(timeLeft) }}</span>
                     <span v-else-if="currentAuction.highestBidAmount && currentAuction.maxPrice && currentAuction.highestBidAmount >= currentAuction.maxPrice" class="time-up" style="color: #67c23a; font-weight: bold; margin-left: 10px;">已出到最高价，等待管理员确认</span>
-                    <span v-else class="time-up">捡漏环节已结束</span>
+                    <span v-else class="time-up" style="color: #f56c6c; font-weight: bold; margin-left: 10px;">倒计时已结束，等待管理员确认</span>
                   </span>
                   <span v-else class="time-up">拍卖已结束</span>
                 </div>
                 <div class="highest-bid">
-                  <div class="bid-label">起拍价：¥{{ currentAuction.startingPrice?.toFixed(2) || '0.00' }}</div>
-                  <div class="bid-label">最高价：¥{{ currentAuction.maxPrice?.toFixed(2) || '0.00' }}</div>
+                  <div class="bid-label">起拍价：¥{{ formatPriceSafe(currentAuction.startingPrice, 'starting') }}</div>
+                  <div class="bid-label">最高价：¥{{ formatPriceSafe(currentAuction.maxPrice, 'max') }}</div>
                   <div class="bid-label">当前最高价</div>
                   <div class="bid-amount">¥{{ currentAuction.highestBidAmount || 0 }}</div>
                   <div class="bid-team" v-if="currentAuction.highestBidTeamName">
@@ -536,7 +536,31 @@ const loadAuctionData = async () => {
   try {
     const res = await getCurrentAuction(sessionId)
     if (res.code === 200 && res.data) {
-      currentAuction.value = res.data
+      // 保存旧的价格数据和其他关键数据，避免刷新时闪烁
+      const oldStartingPrice = currentAuction.value?.startingPrice
+      const oldMaxPrice = currentAuction.value?.maxPrice
+      const oldPlayerId = currentAuction.value?.playerId
+      const oldId = currentAuction.value?.id
+      
+      // 如果新数据和旧数据是同一个拍卖，使用智能合并策略
+      const isSameAuction = oldId && res.data.id === oldId
+      
+      if (isSameAuction) {
+        // 同一个拍卖，智能合并数据，保留价格信息
+        const newData = res.data
+        // 如果新数据中价格为空或无效，但旧数据有值，保持旧值
+        if ((newData.startingPrice == null || newData.startingPrice === 0) && oldStartingPrice != null && oldStartingPrice !== 0) {
+          newData.startingPrice = oldStartingPrice
+        }
+        if ((newData.maxPrice == null || newData.maxPrice === 0) && oldMaxPrice != null && oldMaxPrice !== 0) {
+          newData.maxPrice = oldMaxPrice
+        }
+        currentAuction.value = newData
+      } else {
+        // 不同的拍卖，直接使用新数据
+        currentAuction.value = res.data
+      }
+      
       // 设置出价输入框的初始值为最低出价
       if (currentAuction.value.startingPrice) {
         bidForm.amount = currentAuction.value.highestBidAmount 
@@ -641,6 +665,10 @@ const handleBeginAuction = async () => {
 const handleFinishAuction = async () => {
   if (!currentAuction.value) return
   
+  // 保存当前价格数据，避免在刷新过程中丢失
+  const savedStartingPrice = currentAuction.value.startingPrice
+  const savedMaxPrice = currentAuction.value.maxPrice
+  
   finishing.value = true
   try {
     const res = await finishAuction(currentAuction.value.id, false) // autoFinish=false，管理员手动结束
@@ -650,9 +678,12 @@ const handleFinishAuction = async () => {
       } else {
         ElMessage.success('拍卖已结束')
       }
-      loadAuctionData()
-      loadTeams()
-      loadPoolPlayers()
+      // 延迟一小段时间再刷新数据，避免与WebSocket推送冲突
+      setTimeout(() => {
+        loadAuctionData()
+        loadTeams()
+        loadPoolPlayers()
+      }, 100)
     } else {
       ElMessage.error(res.message || '结束拍卖失败')
     }
@@ -747,6 +778,71 @@ const formatTime = (seconds) => {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+// 安全的价格格式化函数，避免在数据更新时闪烁
+// 使用闭包保存上一次的有效价格值
+const formatPriceSafe = (() => {
+  let lastStartingPrice = null
+  let lastMaxPrice = null
+  
+  return (price, type = 'default') => {
+    // 如果价格为null、undefined，使用上一次保存的有效值
+    if (price == null || price === undefined) {
+      if (type === 'starting') {
+        if (lastStartingPrice != null) {
+          return lastStartingPrice.toFixed(2)
+        }
+      } else if (type === 'max') {
+        if (lastMaxPrice != null) {
+          return lastMaxPrice.toFixed(2)
+        }
+      }
+      // 如果当前拍卖存在，尝试从currentAuction中获取
+      if (currentAuction.value) {
+        const fallbackPrice = type === 'starting' 
+          ? currentAuction.value.startingPrice 
+          : currentAuction.value.maxPrice
+        if (fallbackPrice != null && fallbackPrice !== 0) {
+          return fallbackPrice.toFixed(2)
+        }
+      }
+      // 返回占位符，避免显示0.00造成误解
+      return '--'
+    }
+    
+    // 如果价格为0，也返回'0.00'
+    if (price === 0) {
+      return '0.00'
+    }
+    
+    // 确保是数字类型
+    const numPrice = typeof price === 'number' ? price : parseFloat(price)
+    if (isNaN(numPrice)) {
+      return '0.00'
+    }
+    
+    // 保存有效的价格值
+    if (type === 'starting') {
+      lastStartingPrice = numPrice
+    } else if (type === 'max') {
+      lastMaxPrice = numPrice
+    }
+    
+    return numPrice.toFixed(2)
+  }
+})()
+
+// 保留原formatPrice函数用于其他地方
+const formatPrice = (price) => {
+  if (price == null || price === undefined || price === 0) {
+    return '0.00'
+  }
+  const numPrice = typeof price === 'number' ? price : parseFloat(price)
+  if (isNaN(numPrice)) {
+    return '0.00'
+  }
+  return numPrice.toFixed(2)
+}
+
 const formatDateTime = (dateStr) => {
   if (!dateStr) return ''
   const date = new Date(dateStr)
@@ -778,9 +874,16 @@ const handleExportTeams = async () => {
 // WebSocket回调函数
 const handleAuctionUpdate = (data) => {
   // 拍卖开始或结束 - 不弹提示，只刷新数据（避免重复提示）
-  loadAuctionData()
-  loadTeams()
-  loadPoolPlayers()
+  // 使用防抖，避免频繁刷新导致闪烁
+  if (handleAuctionUpdate.timer) {
+    clearTimeout(handleAuctionUpdate.timer)
+  }
+  handleAuctionUpdate.timer = setTimeout(() => {
+    loadAuctionData()
+    loadTeams()
+    loadPoolPlayers()
+    handleAuctionUpdate.timer = null
+  }, 50) // 50ms防抖
 }
 
 const handleBidUpdate = (data) => {
@@ -802,7 +905,28 @@ const handleSystemStatusUpdate = (status) => {
   // 系统状态更新（包含完整数据）
   if (status.currentAuction) {
     const oldStatus = currentAuction.value?.status
-    currentAuction.value = status.currentAuction
+    const oldStartingPrice = currentAuction.value?.startingPrice
+    const oldMaxPrice = currentAuction.value?.maxPrice
+    const oldId = currentAuction.value?.id
+    
+    // 如果新数据和旧数据是同一个拍卖，使用智能合并策略
+    const isSameAuction = oldId && status.currentAuction.id === oldId
+    
+    if (isSameAuction) {
+      // 同一个拍卖，智能合并数据，保留价格信息
+      const newData = status.currentAuction
+      // 如果新数据中价格为空或无效，但旧数据有值，保持旧值
+      if ((newData.startingPrice == null || newData.startingPrice === 0) && oldStartingPrice != null && oldStartingPrice !== 0) {
+        newData.startingPrice = oldStartingPrice
+      }
+      if ((newData.maxPrice == null || newData.maxPrice === 0) && oldMaxPrice != null && oldMaxPrice !== 0) {
+        newData.maxPrice = oldMaxPrice
+      }
+      currentAuction.value = newData
+    } else {
+      // 不同的拍卖，直接使用新数据
+      currentAuction.value = status.currentAuction
+    }
     
     // 如果状态发生变化，更新倒计时
     if (currentAuction.value.endTime) {
