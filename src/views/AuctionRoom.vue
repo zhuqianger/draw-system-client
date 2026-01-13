@@ -128,7 +128,7 @@
               </div>
 
               <!-- 竞价区域（仅队长） -->
-              <div v-if="isCaptain && (currentAuction.status === 'FIRST_PHASE' || currentAuction.status === 'PICKUP_PHASE') && timeLeft > 0" class="bid-section">
+              <div v-if="isCaptain && (currentAuction.status === 'FIRST_PHASE' || currentAuction.status === 'PICKUP_PHASE') && timeLeft > 0 && timeLeft <= (currentAuction.duration || (currentAuction.status === 'FIRST_PHASE' ? 30 : 20) - 5)" class="bid-section">
                 <div v-if="myTeam" class="team-cost-info">
                   <el-alert
                     :type="myTeam.nowCost > 0 ? 'info' : 'warning'"
@@ -188,6 +188,9 @@
                   <div v-if="currentAuction.highestBidAmount">当前最高价：¥{{ currentAuction.highestBidAmount.toFixed(2) }}，最低出价：¥{{ minBidAmount.toFixed(2) }}</div>
                   <div v-else>最低出价（起拍价）：¥{{ minBidAmount.toFixed(2) }}</div>
                   <div style="margin-top: 5px;">出价必须是0.5的倍数，每次加价最少0.5</div>
+                  <div v-if="timeLeft > (currentAuction.duration || (currentAuction.status === 'FIRST_PHASE' ? 30 : 20) - 5)" style="margin-top: 5px; color: #f56c6c;">
+                    等待期：拍卖开始后5秒内不能出价（剩余等待时间：{{ Math.max(0, timeLeft - (currentAuction.duration || (currentAuction.status === 'FIRST_PHASE' ? 30 : 20) - 5)) }}秒）
+                  </div>
                   <div v-if="myTeam && myTeam.nowCost !== null && myTeam.nowCost !== undefined" style="margin-top: 5px;">
                     剩余费用：¥{{ myTeam.nowCost.toFixed(2) }}，最高可出：¥{{ maxBidAmount.toFixed(1) }}（受费用上限和剩余费用限制）
                   </div>
@@ -468,6 +471,15 @@ const canBid = computed(() => {
   if (!currentAuction.value || bidForm.amount === null || bidForm.amount === undefined) return false
   if (currentAuction.value.status !== 'FIRST_PHASE' && currentAuction.value.status !== 'PICKUP_PHASE') return false
   if (timeLeft.value <= 0) return false
+  
+  // 检查是否已经过了5秒的等待期
+  // 第一阶段：30秒，需要剩余时间<=25秒才能出价（即开始后5秒）
+  // 捡漏阶段：20秒，需要剩余时间<=15秒才能出价（即开始后5秒）
+  const duration = currentAuction.value.duration || (currentAuction.value.status === 'FIRST_PHASE' ? 30 : 20)
+  const minTimeLeft = duration - 5 // 需要剩余时间<=这个值才能出价
+  if (timeLeft.value > minTimeLeft) {
+    return false // 还没到可以出价的时间
+  }
   
   // 检查出价是否是0.5的倍数
   const remainder = Math.abs(bidForm.amount % 0.5)
