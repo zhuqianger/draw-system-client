@@ -541,6 +541,7 @@ const loadAuctionData = async () => {
       const oldMaxPrice = currentAuction.value?.maxPrice
       const oldPlayerId = currentAuction.value?.playerId
       const oldId = currentAuction.value?.id
+      const oldEndTime = currentAuction.value?.endTime
       
       // 如果新数据和旧数据是同一个拍卖，使用智能合并策略
       const isSameAuction = oldId && res.data.id === oldId
@@ -555,9 +556,27 @@ const loadAuctionData = async () => {
         if ((newData.maxPrice == null || newData.maxPrice === 0) && oldMaxPrice != null && oldMaxPrice !== 0) {
           newData.maxPrice = oldMaxPrice
         }
+        
+        // 如果倒计时已经过期，且新数据的endTime没有变化或更早，保持过期状态
+        if (isTimeExpired && oldEndTime && newData.endTime) {
+          const newEndTimeMs = new Date(newData.endTime).getTime()
+          const oldEndTimeMs = new Date(oldEndTime).getTime()
+          // 如果新endTime更早或相同，保持过期状态
+          if (newEndTimeMs <= oldEndTimeMs) {
+            currentAuction.value = newData
+            // 不调用updateTimeLeft，保持过期状态
+            loadBidHistory(currentAuction.value.id)
+            return
+          } else {
+            // 如果新endTime更晚（不应该发生，但作为保护），重置过期状态
+            isTimeExpired = false
+          }
+        }
+        
         currentAuction.value = newData
       } else {
-        // 不同的拍卖，直接使用新数据
+        // 不同的拍卖，直接使用新数据，重置过期标记
+        isTimeExpired = false
         currentAuction.value = res.data
       }
       
@@ -575,6 +594,7 @@ const loadAuctionData = async () => {
       loadBidHistory(currentAuction.value.id)
     } else {
       currentAuction.value = null
+      isTimeExpired = false
       bidForm.amount = 0
     }
   } catch (error) {
@@ -729,10 +749,14 @@ const handleBid = async () => {
   }
 }
 
+// 标记倒计时是否已结束，避免在已结束时重新启动倒计时
+let isTimeExpired = false
+
 const updateTimeLeft = () => {
   // 如果状态是WAITING，没有倒计时
   if (currentAuction.value?.status === 'WAITING') {
     timeLeft.value = 0
+    isTimeExpired = false
     if (timer) {
       clearInterval(timer)
       timer = null
@@ -742,6 +766,7 @@ const updateTimeLeft = () => {
   
   if (!currentAuction.value?.endTime) {
     timeLeft.value = 0
+    isTimeExpired = false
     if (timer) {
       clearInterval(timer)
       timer = null
@@ -753,22 +778,42 @@ const updateTimeLeft = () => {
   const now = Date.now()
   const diff = Math.max(0, Math.floor((endTime - now) / 1000))
   
+  // 如果倒计时已经结束过，且新数据仍然显示已过期，直接设置为0，不再重新计算
+  if (isTimeExpired && diff <= 0) {
+    timeLeft.value = 0
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
+    return
+  }
+  
+  // 如果diff > 0，重置过期标记
+  if (diff > 0) {
+    isTimeExpired = false
+  }
+  
   timeLeft.value = diff
   
   if (diff > 0 && !timer) {
     timer = setInterval(() => {
       timeLeft.value = Math.max(0, timeLeft.value - 1)
-      // 倒计时结束后，不发送请求，等待后端定时任务自动处理并通过WebSocket推送
+      // 倒计时结束后，标记为已过期，不再刷新数据（等待后端推送）
       if (timeLeft.value === 0) {
+        isTimeExpired = true
         clearInterval(timer)
         timer = null
-        // 只刷新数据，等待后端推送状态变化
-        loadAuctionData()
+        // 不再调用loadAuctionData()，完全依赖后端WebSocket推送
       }
     }, 1000)
-  } else if (diff <= 0 && timer) {
-    clearInterval(timer)
-    timer = null
+  } else if (diff <= 0) {
+    // 如果计算出的diff <= 0，标记为已过期
+    isTimeExpired = true
+    timeLeft.value = 0
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
   }
 }
 
@@ -908,6 +953,7 @@ const handleSystemStatusUpdate = (status) => {
     const oldStartingPrice = currentAuction.value?.startingPrice
     const oldMaxPrice = currentAuction.value?.maxPrice
     const oldId = currentAuction.value?.id
+    const oldEndTime = currentAuction.value?.endTime
     
     // 如果新数据和旧数据是同一个拍卖，使用智能合并策略
     const isSameAuction = oldId && status.currentAuction.id === oldId
@@ -922,9 +968,23 @@ const handleSystemStatusUpdate = (status) => {
       if ((newData.maxPrice == null || newData.maxPrice === 0) && oldMaxPrice != null && oldMaxPrice !== 0) {
         newData.maxPrice = oldMaxPrice
       }
+      
+      // 如果旧数据已经过期，且新数据的endTime没有变化或更早，保持过期状态
+      if (isTimeExpired && oldEndTime) {
+        const newEndTime = newData.endTime ? new Date(newData.endTime).getTime() : null
+        const oldEndTimeMs = new Date(oldEndTime).getTime()
+        // 如果新endTime不存在或更早/相同，保持过期状态
+        if (!newEndTime || newEndTime <= oldEndTimeMs) {
+          // 保持过期状态，不更新倒计时
+          currentAuction.value = newData
+          return // 提前返回，不更新倒计时
+        }
+      }
+      
       currentAuction.value = newData
     } else {
-      // 不同的拍卖，直接使用新数据
+      // 不同的拍卖，直接使用新数据，重置过期标记
+      isTimeExpired = false
       currentAuction.value = status.currentAuction
     }
     
@@ -933,8 +993,9 @@ const handleSystemStatusUpdate = (status) => {
       updateTimeLeft()
     }
     
-    // 如果从第一阶段进入捡漏环节，更新倒计时
+    // 如果从第一阶段进入捡漏环节，重置过期标记并更新倒计时
     if (oldStatus === 'FIRST_PHASE' && currentAuction.value.status === 'PICKUP_PHASE') {
+      isTimeExpired = false
       updateTimeLeft()
     }
     
@@ -943,6 +1004,7 @@ const handleSystemStatusUpdate = (status) => {
     }
   } else {
     currentAuction.value = null
+    isTimeExpired = false
   }
   // 可以更新teams和poolPlayers，但为了保持sessionId过滤，还是调用API
   loadTeams()
