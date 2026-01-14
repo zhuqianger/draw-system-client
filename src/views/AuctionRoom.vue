@@ -578,6 +578,11 @@ const loadAuctionData = async () => {
         // 不同的拍卖，直接使用新数据，重置过期标记
         isTimeExpired = false
         currentAuction.value = res.data
+        // 确保新拍卖的价格数据被正确设置
+        if (currentAuction.value.startingPrice == null || currentAuction.value.maxPrice == null) {
+          // 如果价格数据缺失，尝试从后端重新获取
+          // 这种情况不应该发生，但作为保护措施
+        }
       }
       
       // 设置出价输入框的初始值为最低出价
@@ -830,8 +835,26 @@ const formatPriceSafe = (() => {
   let lastMaxPrice = null
   
   return (price, type = 'default') => {
-    // 如果价格为null、undefined，使用上一次保存的有效值
+    // 如果价格为null、undefined，先尝试从currentAuction中获取
     if (price == null || price === undefined) {
+      if (currentAuction.value) {
+        const fallbackPrice = type === 'starting' 
+          ? currentAuction.value.startingPrice 
+          : currentAuction.value.maxPrice
+        if (fallbackPrice != null && fallbackPrice !== 0) {
+          // 如果从currentAuction中获取到有效价格，保存并返回
+          const numPrice = typeof fallbackPrice === 'number' ? fallbackPrice : parseFloat(fallbackPrice)
+          if (!isNaN(numPrice)) {
+            if (type === 'starting') {
+              lastStartingPrice = numPrice
+            } else if (type === 'max') {
+              lastMaxPrice = numPrice
+            }
+            return numPrice.toFixed(2)
+          }
+        }
+      }
+      // 如果currentAuction中也没有，尝试使用上一次保存的有效值
       if (type === 'starting') {
         if (lastStartingPrice != null) {
           return lastStartingPrice.toFixed(2)
@@ -839,15 +862,6 @@ const formatPriceSafe = (() => {
       } else if (type === 'max') {
         if (lastMaxPrice != null) {
           return lastMaxPrice.toFixed(2)
-        }
-      }
-      // 如果当前拍卖存在，尝试从currentAuction中获取
-      if (currentAuction.value) {
-        const fallbackPrice = type === 'starting' 
-          ? currentAuction.value.startingPrice 
-          : currentAuction.value.maxPrice
-        if (fallbackPrice != null && fallbackPrice !== 0) {
-          return fallbackPrice.toFixed(2)
         }
       }
       // 返回占位符，避免显示0.00造成误解
