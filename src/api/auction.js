@@ -52,3 +52,18 @@ export const finishAuction = (auctionId, autoFinish = false) => {
     params: { autoFinish }
   })
 }
+
+export const getPickRecords = (sessionId) => {
+  return request({
+    url: `/auction/picks`,
+    method: 'get',
+    params: { sessionId }
+  })
+}
+
+export const rollbackByPickRecord = (recordId) => {
+  return request({
+    url: `/auction/rollback/${recordId}`,
+    method: 'post'
+  })
+}

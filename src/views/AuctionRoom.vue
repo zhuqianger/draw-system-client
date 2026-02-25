@@ -32,7 +32,7 @@
     <div class="page-main">
       <el-row :gutter="20" style="flex: 1; overflow: hidden; display: flex;">
         <!-- 左侧：当前拍卖和竞价记录 -->
-        <el-col :span="16" style="display: flex; flex-direction: column; overflow: hidden;">
+        <el-col :span="8" style="display: flex; flex-direction: column; overflow: hidden;">
           <el-card class="auction-card" shadow="hover">
             <template #header>
               <div class="card-header">
@@ -245,6 +245,56 @@
           </el-card>
         </el-col>
 
+        <!-- 中间：选人纪录 -->
+        <el-col :span="8" style="display: flex; flex-direction: column; overflow: hidden;">
+          <el-card class="picks-card" shadow="hover" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+            <template #header>
+              <div class="card-title">
+                <el-icon :size="20"><List /></el-icon>
+                <span>选人纪录</span>
+              </div>
+            </template>
+            <div style="flex: 1; overflow-y: auto; min-height: 0;">
+              <el-timeline v-if="pickRecords.length > 0">
+                <el-timeline-item
+                  v-for="record in pickRecords"
+                  :key="record.id"
+                  :timestamp="formatDateTime(record.createTime)"
+                  placement="top"
+                  size="default"
+                >
+                  <el-card shadow="hover" class="pick-card">
+                    <div class="pick-item">
+                      <div class="pick-main">
+                        <div class="pick-seq">第{{ record.sequence }}轮</div>
+                        <div class="pick-text">
+                          <span class="pick-team">{{ record.teamName || '未知队伍' }}</span>
+                          <span class="pick-captain" v-if="record.captainName">（队长：{{ record.captainName }}）</span>
+                          <span> 拍得 </span>
+                          <span class="pick-player">{{ record.playerGroupName || record.playerGameId || '未知队员' }}</span>
+                        </div>
+                      </div>
+                      <div class="pick-amount">
+                        <span class="pick-price">¥{{ record.amount }}</span>
+                        <el-button
+                          v-if="isAdmin"
+                          type="danger"
+                          size="small"
+                          :loading="rollingBack"
+                          @click="handleRollback(record)"
+                        >
+                          回退到此处
+                        </el-button>
+                      </div>
+                    </div>
+                  </el-card>
+                </el-timeline-item>
+              </el-timeline>
+              <el-empty v-else description="暂无选人纪录" :image-size="80" />
+            </div>
+          </el-card>
+        </el-col>
+
         <!-- 右侧：队伍信息和待拍卖池 -->
         <el-col :span="8" style="display: flex; flex-direction: column; overflow: hidden;">
           <el-card class="teams-card" shadow="hover" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
@@ -355,14 +405,14 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowLeft, Trophy, User, Clock, List, UserFilled, Box, Refresh, CircleClose, Money, Download, VideoPlay,
   Plus,
   Minus
 } from '@element-plus/icons-vue'
 import { getSession } from '../api/session'
-import { placeBid, getCurrentAuction, getBids, createAuction, beginAuction, finishAuction } from '../api/auction'
+import { placeBid, getCurrentAuction, getBids, createAuction, beginAuction, finishAuction, getPickRecords, rollbackByPickRecord } from '../api/auction'
 import { getPoolPlayers, getTeams, exportTeams } from '../api/player'
 import { connectWebSocket, disconnectWebSocket } from '../utils/websocket'
 
@@ -375,11 +425,13 @@ const currentAuction = ref(null)
 const teams = ref([])
 const poolPlayers = ref([])
 const bidHistory = ref([])
+const pickRecords = ref([])
 const bidding = ref(false)
 const drawing = ref(false)
 const beginning = ref(false)
 const finishing = ref(false)
 const exporting = ref(false)
+const rollingBack = ref(false)
 const timeLeft = ref(0)
 let timer = null
 
@@ -618,6 +670,17 @@ const loadBidHistory = async (auctionId) => {
   }
 }
 
+const loadPickRecords = async () => {
+  try {
+    const res = await getPickRecords(sessionId)
+    if (res.code === 200) {
+      pickRecords.value = res.data || []
+    }
+  } catch (error) {
+    console.error('加载选人纪录失败', error)
+  }
+}
+
 const loadTeams = async () => {
   try {
     const res = await getTeams(sessionId)
@@ -708,6 +771,7 @@ const handleFinishAuction = async () => {
         loadAuctionData()
         loadTeams()
         loadPoolPlayers()
+        loadPickRecords()
       }, 100)
     } else {
       ElMessage.error(res.message || '结束拍卖失败')
@@ -930,6 +994,48 @@ const handleExportTeams = async () => {
   }
 }
 
+const handleRollback = async (record) => {
+  if (!isAdmin.value) {
+    ElMessage.warning('只有管理员可以回退选人纪录')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认要回退到第 ${record.sequence} 条选人纪录之前的状态吗？此操作会撤销之后所有已选队员，并重新计算队伍费用。`,
+      '确认回退',
+      {
+        type: 'warning',
+        confirmButtonText: '确认回退',
+        cancelButtonText: '取消'
+      }
+    )
+  } catch {
+    // 用户取消
+    return
+  }
+
+  rollingBack.value = true
+  try {
+    const res = await rollbackByPickRecord(record.id)
+    if (res.code === 200) {
+      ElMessage.success(res.message || '回退成功')
+      // 回退会通过 WebSocket 推送系统状态，这里再主动刷新一遍以确保一致性
+      await Promise.all([
+        loadAuctionData(),
+        loadTeams(),
+        loadPoolPlayers(),
+        loadPickRecords()
+      ])
+    } else {
+      ElMessage.error(res.message || '回退失败')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '回退失败')
+  } finally {
+    rollingBack.value = false
+  }
+}
+
 // WebSocket回调函数
 const handleAuctionUpdate = (data) => {
   // 拍卖开始或结束 - 不弹提示，只刷新数据（避免重复提示）
@@ -958,6 +1064,7 @@ const handlePlayerAssigned = (data) => {
   loadAuctionData()
   loadTeams()
   loadPoolPlayers()
+  loadPickRecords()
 }
 
 const handleSystemStatusUpdate = (status) => {
@@ -1023,6 +1130,7 @@ const handleSystemStatusUpdate = (status) => {
   // 可以更新teams和poolPlayers，但为了保持sessionId过滤，还是调用API
   loadTeams()
   loadPoolPlayers()
+  loadPickRecords()
 }
 
 onMounted(() => {
@@ -1030,6 +1138,7 @@ onMounted(() => {
   loadAuctionData()
   loadTeams()
   loadPoolPlayers()
+  loadPickRecords()
 
   // 连接WebSocket
   connectWebSocket(sessionId, {
@@ -1154,7 +1263,7 @@ onUnmounted(() => {
   box-sizing: border-box;
 }
 
-.auction-card, .bids-card, .teams-card, .pool-card {
+.auction-card, .bids-card, .picks-card, .teams-card, .pool-card {
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -1163,7 +1272,7 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-.auction-card:hover, .bids-card:hover, .teams-card:hover, .pool-card:hover {
+.auction-card:hover, .bids-card:hover, .picks-card:hover, .teams-card:hover, .pool-card:hover {
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
   transform: translateY(-2px);
 }
@@ -1343,6 +1452,60 @@ onUnmounted(() => {
 
 .bid-card {
   background: rgba(255, 255, 255, 0.95);
+}
+
+.pick-card {
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.pick-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.pick-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pick-seq {
+  font-size: 13px;
+  color: #909399;
+}
+
+.pick-text {
+  font-size: 14px;
+  color: #333;
+}
+
+.pick-team {
+  font-weight: 700;
+  color: #0d2d53;
+}
+
+.pick-captain {
+  margin-left: 4px;
+  color: #606266;
+}
+
+.pick-player {
+  font-weight: 700;
+  color: #f56c6c;
+}
+
+.pick-amount {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pick-price {
+  font-size: 18px;
+  font-weight: 700;
+  color: #f56c6c;
 }
 
 .teams-list {
