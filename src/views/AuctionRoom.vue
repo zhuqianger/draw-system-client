@@ -383,6 +383,15 @@
                         <span class="tooltip-label">费用：</span>
                         <span class="tooltip-value highlight">¥{{ player.cost.toFixed(2) }}</span>
                       </div>
+                      <div class="tooltip-item" v-if="isAdmin && availableTeams.length > 0" style="margin-top: 8px; justify-content: flex-end;">
+                        <el-button
+                          type="primary"
+                          size="small"
+                          @click.stop="openAssignDialog(player)"
+                        >
+                          分配到指定队伍
+                        </el-button>
+                      </div>
                     </div>
                   </div>
                 </template>
@@ -398,6 +407,43 @@
           </el-card>
         </el-col>
       </el-row>
+
+      <!-- 分配队员到指定队伍的弹窗 -->
+      <el-dialog
+        v-model="assignDialogVisible"
+        title="分配到指定队伍"
+        width="420px"
+        destroy-on-close
+      >
+        <el-form :model="assignForm" label-width="90px">
+          <el-form-item label="队员">
+            <span>{{ assignTargetPlayer?.groupName || assignTargetPlayer?.gameId || '未知' }}</span>
+          </el-form-item>
+          <el-form-item label="目标队伍">
+            <el-select v-model="assignForm.teamId" placeholder="请选择队伍" style="width: 260px">
+              <el-option
+                v-for="team in availableTeams"
+                :key="team.id"
+                :label="`${team.teamName}（${team.playerCount}/4，剩余¥${team.nowCost?.toFixed(2) || '0.00'}）`"
+                :value="team.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="费用">
+            <el-input-number
+              v-model="assignForm.amount"
+              :min="0.5"
+              :step="0.5"
+              :precision="1"
+              style="width: 160px"
+            />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="assignDialogVisible = false">取 消</el-button>
+          <el-button type="primary" :loading="assigning" @click="handleAssignConfirm">确 定</el-button>
+        </template>
+      </el-dialog>
     </div>
   </div>
 </template>
@@ -413,7 +459,7 @@ import {
 } from '@element-plus/icons-vue'
 import { getSession } from '../api/session'
 import { placeBid, getCurrentAuction, getBids, createAuction, beginAuction, finishAuction, getPickRecords, rollbackByPickRecord } from '../api/auction'
-import { getPoolPlayers, getTeams, exportTeams } from '../api/player'
+import { getPoolPlayers, getTeams, exportTeams, assignPlayerToTeam } from '../api/player'
 import { connectWebSocket, disconnectWebSocket } from '../utils/websocket'
 
 const route = useRoute()
@@ -432,6 +478,14 @@ const beginning = ref(false)
 const finishing = ref(false)
 const exporting = ref(false)
 const rollingBack = ref(false)
+const assignDialogVisible = ref(false)
+const assigning = ref(false)
+const assignTargetPlayer = ref(null)
+const assignForm = reactive({
+  playerId: null,
+  teamId: null,
+  amount: 0
+})
 const timeLeft = ref(0)
 let timer = null
 
@@ -464,6 +518,10 @@ const sessionStatusText = computed(() => {
 const myTeam = computed(() => {
   if (!userInfo.value?.userId) return null
   return teams.value.find(t => t.userId === userInfo.value.userId)
+})
+
+const availableTeams = computed(() => {
+  return teams.value.filter(t => (t.playerCount ?? 0) < 4)
 })
 
 // 计算最低出价（费用下限：起拍价）
@@ -991,6 +1049,61 @@ const handleExportTeams = async () => {
     ElMessage.error('导出失败：' + (error.response?.data?.message || error.message))
   } finally {
     exporting.value = false
+  }
+}
+
+const openAssignDialog = (player) => {
+  if (!isAdmin.value) return
+  assignTargetPlayer.value = player
+  assignForm.playerId = player.id
+  assignForm.teamId = availableTeams.value[0]?.id || null
+  assignForm.amount = player.cost != null ? roundToHalf(Number(player.cost)) : 1
+  assignDialogVisible.value = true
+}
+
+const handleAssignConfirm = async () => {
+  if (!isAdmin.value) {
+    ElMessage.warning('只有管理员可以分配队员')
+    return
+  }
+  if (!assignForm.playerId || !assignForm.teamId) {
+    ElMessage.warning('请选择队伍')
+    return
+  }
+  const team = availableTeams.value.find(t => t.id === assignForm.teamId)
+  if (!team) {
+    ElMessage.error('目标队伍不存在或已满员')
+    return
+  }
+
+  const amount = roundToHalf(assignForm.amount || 0)
+  if (amount <= 0) {
+    ElMessage.warning('费用必须大于0')
+    return
+  }
+
+  assigning.value = true
+  try {
+    const res = await assignPlayerToTeam({
+      playerId: assignForm.playerId,
+      teamId: assignForm.teamId,
+      amount
+    })
+    if (res.code === 200) {
+      ElMessage.success(res.message || '分配成功')
+      assignDialogVisible.value = false
+      await Promise.all([
+        loadTeams(),
+        loadPoolPlayers(),
+        loadPickRecords()
+      ])
+    } else {
+      ElMessage.error(res.message || '分配失败')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '分配失败')
+  } finally {
+    assigning.value = false
   }
 }
 

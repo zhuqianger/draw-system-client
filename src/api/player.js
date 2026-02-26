@@ -21,3 +21,11 @@ export const exportTeams = (sessionId) => {
     responseType: 'blob'
   })
 }
+
+export const assignPlayerToTeam = (data) => {
+  return request({
+    url: '/player/assign',
+    method: 'post',
+    data
+  })
+}
