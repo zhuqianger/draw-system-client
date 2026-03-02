@@ -93,6 +93,20 @@
           />
           <div class="form-tip">例如：1,3,5 表示表格内1,3,5为队长，并且依次为1、2、3号队伍队长</div>
         </el-form-item>
+        <el-form-item label="每队初始总费用">
+          <el-input-number
+            v-model="createForm.initialTotalCost"
+            :min="0.5"
+            :step="0.5"
+            :precision="1"
+            style="width: 260px"
+            placeholder="不填则使用平均费用+2"
+          />
+          <div class="form-tip">
+            不填时，每个队伍总费用 = Excel 中所有队员费用的平均值 + 2；
+            队长开始拍卖时可用费用 = 总费用 - 该队长费用。
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showCreateDialog = false">取消</el-button>
@@ -126,7 +140,8 @@ const isAdmin = computed(() => userInfo.value?.userType === 'ADMIN')
 const createForm = reactive({
   sessionName: '',
   excelFile: null,
-  captainIndices: ''
+  captainIndices: '',
+  initialTotalCost: null
 })
 
 const createRules = {
@@ -161,6 +176,7 @@ const resetCreateForm = () => {
   createForm.sessionName = ''
   createForm.excelFile = null
   createForm.captainIndices = ''
+  createForm.initialTotalCost = null
   if (uploadRef.value) {
     uploadRef.value.clearFiles()
   }
@@ -185,6 +201,9 @@ const handleCreate = async () => {
         formData.append('sessionName', createForm.sessionName)
         formData.append('excelFile', createForm.excelFile)
         formData.append('captainIndices', createForm.captainIndices)
+          if (createForm.initialTotalCost !== null && createForm.initialTotalCost !== undefined && createForm.initialTotalCost !== '') {
+            formData.append('initialTotalCost', createForm.initialTotalCost)
+          }
         
         const res = await createSession(formData)
         if (res.code === 200) {
