@@ -29,3 +29,19 @@ export const assignPlayerToTeam = (data) => {
     data
   })
 }
+
+export const updateTeamCost = (data) => {
+  return request({
+    url: '/team/updateCost',
+    method: 'post',
+    data
+  })
+}
+
+export const removePlayerFromTeam = (data) => {
+  return request({
+    url: '/team/removePlayer',
+    method: 'post',
+    data
+  })
+}

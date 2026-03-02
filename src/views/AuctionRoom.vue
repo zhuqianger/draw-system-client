@@ -319,7 +319,12 @@
                 </div>
                 <div class="team-captain">队长：{{ team.captainName }}</div>
                 <div class="team-cost" v-if="team.nowCost !== null && team.nowCost !== undefined">
-                  <el-tag type="warning" size="large" style="width: 100%; justify-content: center;">
+                  <el-tag
+                    type="warning"
+                    size="large"
+                    style="width: 100%; justify-content: center; cursor: pointer;"
+                    @click.stop="isAdmin ? openUpdateTeamCostDialog(team) : null"
+                  >
                     <span>剩余费用：<strong>¥{{ team.nowCost.toFixed(2) }}</strong></span>
                   </el-tag>
                 </div>
@@ -329,6 +334,8 @@
                     :key="player.id"
                     class="player-tag"
                     size="large"
+                    :class="{ 'clickable-player': isAdmin && player.id !== team.captainId }"
+                    @click.stop="handleTeamPlayerClick(team, player)"
                   >
                     {{ player.groupName || player.gameId }}
                   </el-tag>
@@ -444,6 +451,33 @@
           <el-button type="primary" :loading="assigning" @click="handleAssignConfirm">确 定</el-button>
         </template>
       </el-dialog>
+
+      <!-- 修改队伍剩余费用的弹窗 -->
+      <el-dialog
+        v-model="updateCostDialogVisible"
+        title="修改队伍剩余费用"
+        width="420px"
+        destroy-on-close
+      >
+        <el-form :model="updateCostForm" label-width="100px">
+          <el-form-item label="队伍">
+            <span>{{ updateCostForm.teamName || updateCostForm.teamId }}</span>
+          </el-form-item>
+          <el-form-item label="当前剩余">
+            <el-input-number
+              v-model="updateCostForm.nowCost"
+              :min="0"
+              :step="0.5"
+              :precision="1"
+              style="width: 200px"
+            />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="updateCostDialogVisible = false">取 消</el-button>
+          <el-button type="primary" :loading="updatingCost" @click="handleUpdateCostConfirm">确 定</el-button>
+        </template>
+      </el-dialog>
     </div>
   </div>
 </template>
@@ -459,7 +493,7 @@ import {
 } from '@element-plus/icons-vue'
 import { getSession } from '../api/session'
 import { placeBid, getCurrentAuction, getBids, createAuction, beginAuction, finishAuction, getPickRecords, rollbackByPickRecord } from '../api/auction'
-import { getPoolPlayers, getTeams, exportTeams, assignPlayerToTeam } from '../api/player'
+import { getPoolPlayers, getTeams, exportTeams, assignPlayerToTeam, updateTeamCost, removePlayerFromTeam } from '../api/player'
 import { connectWebSocket, disconnectWebSocket } from '../utils/websocket'
 
 const route = useRoute()
@@ -485,6 +519,13 @@ const assignForm = reactive({
   playerId: null,
   teamId: null,
   amount: 0
+})
+const updateCostDialogVisible = ref(false)
+const updatingCost = ref(false)
+const updateCostForm = reactive({
+  teamId: null,
+  teamName: '',
+  nowCost: 0
 })
 const timeLeft = ref(0)
 let timer = null
@@ -1052,6 +1093,54 @@ const handleExportTeams = async () => {
   }
 }
 
+const openUpdateTeamCostDialog = (team) => {
+  if (!isAdmin.value) return
+  if (team.nowCost === null || team.nowCost === undefined) return
+  updateCostForm.teamId = team.id
+  updateCostForm.teamName = team.teamName
+  updateCostForm.nowCost = Number(team.nowCost)
+  updateCostDialogVisible.value = true
+}
+
+const handleUpdateCostConfirm = async () => {
+  if (!isAdmin.value) {
+    ElMessage.warning('只有管理员可以修改队伍费用')
+    return
+  }
+  if (!updateCostForm.teamId) {
+    ElMessage.error('队伍信息缺失')
+    return
+  }
+  const value = Number(updateCostForm.nowCost || 0)
+  if (value < 0) {
+    ElMessage.warning('剩余费用不能为负数')
+    return
+  }
+
+  updatingCost.value = true
+  try {
+    const res = await updateTeamCost({
+      teamId: updateCostForm.teamId,
+      nowCost: value
+    })
+    if (res.code === 200) {
+      ElMessage.success(res.message || '队伍费用已更新')
+      updateCostDialogVisible.value = false
+      await Promise.all([
+        loadTeams(),
+        loadPoolPlayers(),
+        loadPickRecords()
+      ])
+    } else {
+      ElMessage.error(res.message || '更新失败')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '更新失败')
+  } finally {
+    updatingCost.value = false
+  }
+}
+
 const openAssignDialog = (player) => {
   if (!isAdmin.value) return
   assignTargetPlayer.value = player
@@ -1104,6 +1193,48 @@ const handleAssignConfirm = async () => {
     ElMessage.error(error.response?.data?.message || '分配失败')
   } finally {
     assigning.value = false
+  }
+}
+
+const handleTeamPlayerClick = async (team, player) => {
+  if (!isAdmin.value) return
+  if (!team || !player) return
+  if (player.id === team.captainId) {
+    ElMessage.info('不能移除队长')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要将队员「${player.groupName || player.gameId || player.id}」移出 ${team.teamName} 并放回待拍卖池吗？`,
+      '移除确认',
+      {
+        type: 'warning',
+        confirmButtonText: '确定',
+        cancelButtonText: '取消'
+      }
+    )
+  } catch {
+    return
+  }
+
+  try {
+    const res = await removePlayerFromTeam({
+      teamId: team.id,
+      playerId: player.id
+    })
+    if (res.code === 200) {
+      ElMessage.success(res.message || '已移除队员')
+      await Promise.all([
+        loadTeams(),
+        loadPoolPlayers(),
+        loadPickRecords()
+      ])
+    } else {
+      ElMessage.error(res.message || '移除失败')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '移除失败')
   }
 }
 
@@ -1691,6 +1822,10 @@ onUnmounted(() => {
 
 .player-tag {
   font-size: 14px;
+}
+
+.player-tag.clickable-player {
+  cursor: pointer;
 }
 
 .no-players {
