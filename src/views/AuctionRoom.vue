@@ -62,6 +62,16 @@
                     开始拍卖
                   </el-button>
                   <el-button
+                    v-if="currentAuction && currentAuction.status === 'WAITING'"
+                    type="warning"
+                    :icon="Refresh"
+                    @click="handleRedraw"
+                    :loading="redrawing"
+                    size="large"
+                  >
+                    重新抽选
+                  </el-button>
+                  <el-button
                     v-if="currentAuction && (currentAuction.status === 'FIRST_PHASE' || currentAuction.status === 'PICKUP_PHASE')"
                     type="danger"
                     :icon="CircleClose"
@@ -214,40 +224,8 @@
             </el-empty>
           </el-card>
 
-          <!-- 竞价历史 -->
-          <el-card class="bids-card" shadow="hover" style="margin-top: 15px; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
-            <template #header>
-              <div class="card-title">
-                <el-icon :size="20"><List /></el-icon>
-                <span>竞价记录</span>
-              </div>
-            </template>
-            <div style="flex: 1; overflow-y: auto; min-height: 0;">
-              <el-timeline>
-                <el-timeline-item
-                  v-for="(bid, index) in bidHistory"
-                  :key="index"
-                  :timestamp="formatDateTime(bid.bidTime)"
-                  placement="top"
-                  size="default"
-                >
-                  <el-card shadow="hover" class="bid-card">
-                    <div class="bid-item">
-                      <div class="bid-team-name">{{ bid.teamName || '未知队伍' }}</div>
-                      <div class="bid-amount-large">¥{{ bid.amount }}</div>
-                      <el-tag v-if="bid.isWinner" type="success" size="small">获胜</el-tag>
-                    </div>
-                  </el-card>
-                </el-timeline-item>
-              </el-timeline>
-              <el-empty v-if="bidHistory.length === 0" description="暂无竞价记录" :image-size="80" />
-            </div>
-          </el-card>
-        </el-col>
-
-        <!-- 中间：选人纪录 -->
-        <el-col :span="8" style="display: flex; flex-direction: column; overflow: hidden;">
-          <el-card class="picks-card" shadow="hover" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+          <!-- 选人纪录 -->
+          <el-card class="picks-card" shadow="hover" style="margin-top: 15px; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
             <template #header>
               <div class="card-title">
                 <el-icon :size="20"><List /></el-icon>
@@ -291,6 +269,38 @@
                 </el-timeline-item>
               </el-timeline>
               <el-empty v-else description="暂无选人纪录" :image-size="80" />
+            </div>
+          </el-card>
+        </el-col>
+
+        <!-- 中间：竞价历史 -->
+        <el-col :span="8" style="display: flex; flex-direction: column; overflow: hidden;">
+          <el-card class="bids-card" shadow="hover" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+            <template #header>
+              <div class="card-title">
+                <el-icon :size="20"><List /></el-icon>
+                <span>竞价记录</span>
+              </div>
+            </template>
+            <div style="flex: 1; overflow-y: auto; min-height: 0;">
+              <el-timeline>
+                <el-timeline-item
+                  v-for="(bid, index) in bidHistory"
+                  :key="index"
+                  :timestamp="formatDateTime(bid.bidTime)"
+                  placement="top"
+                  size="default"
+                >
+                  <el-card shadow="hover" class="bid-card">
+                    <div class="bid-item">
+                      <div class="bid-team-name">{{ bid.teamName || '未知队伍' }}</div>
+                      <div class="bid-amount-large">¥{{ bid.amount }}</div>
+                      <el-tag v-if="bid.isWinner" type="success" size="small">获胜</el-tag>
+                    </div>
+                  </el-card>
+                </el-timeline-item>
+              </el-timeline>
+              <el-empty v-if="bidHistory.length === 0" description="暂无竞价记录" :image-size="80" />
             </div>
           </el-card>
         </el-col>
@@ -510,6 +520,7 @@ const bidding = ref(false)
 const drawing = ref(false)
 const beginning = ref(false)
 const finishing = ref(false)
+const redrawing = ref(false)
 const exporting = ref(false)
 const rollingBack = ref(false)
 const assignDialogVisible = ref(false)
@@ -879,6 +890,59 @@ const handleFinishAuction = async () => {
     ElMessage.error(error.response?.data?.message || '结束拍卖失败')
   } finally {
     finishing.value = false
+  }
+}
+
+// 重新抽选：仅在当前已抽出队员但未开始拍卖（WAITING）时可用
+const handleRedraw = async () => {
+  if (!isAdmin.value) {
+    ElMessage.warning('只有管理员可以重新抽选')
+    return
+  }
+  if (!currentAuction.value || currentAuction.value.status !== 'WAITING') {
+    return
+  }
+  if (poolPlayers.value.length === 0) {
+    ElMessage.warning('待拍卖池为空，无法重新抽选')
+    return
+  }
+
+  redrawing.value = true
+  try {
+    // 结束当前未开始的拍卖，把该队员放回待拍卖池
+    const resFinish = await finishAuction(currentAuction.value.id, false)
+    if (resFinish.code !== 200) {
+      ElMessage.error(resFinish.message || '结束当前拍卖失败，无法重新抽选')
+      return
+    }
+
+    // 更新一次待拍卖池，确保刚才的队员已经回到池中
+    await loadPoolPlayers()
+    if (poolPlayers.value.length === 0) {
+      ElMessage.warning('待拍卖池为空，无法重新抽选')
+      await loadAuctionData()
+      return
+    }
+
+    // 随机选择一个新的队员
+    const randomIndex = Math.floor(Math.random() * poolPlayers.value.length)
+    const selectedPlayer = poolPlayers.value[randomIndex]
+
+    const resCreate = await createAuction(sessionId, selectedPlayer.id)
+    if (resCreate.code === 200) {
+      ElMessage.success(`已重新抽选：${selectedPlayer.groupName || selectedPlayer.gameId || '未知'}，等待开始拍卖`)
+      await Promise.all([
+        loadAuctionData(),
+        loadPoolPlayers()
+      ])
+    } else {
+      ElMessage.error(resCreate.message || '重新抽选失败')
+      await loadAuctionData()
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '重新抽选失败')
+  } finally {
+    redrawing.value = false
   }
 }
 
