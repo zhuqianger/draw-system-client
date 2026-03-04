@@ -138,7 +138,7 @@
               </div>
 
               <!-- 竞价区域（仅队长） -->
-              <div v-if="isCaptain && (currentAuction.status === 'FIRST_PHASE' || currentAuction.status === 'PICKUP_PHASE') && timeLeft > 0 && timeLeft <= (currentAuction.duration || (currentAuction.status === 'FIRST_PHASE' ? 30 : 20) - 5)" class="bid-section">
+              <div v-if="isCaptain && (currentAuction.status === 'FIRST_PHASE' || currentAuction.status === 'PICKUP_PHASE') && timeLeft > 0 && timeLeft <= (currentAuction.duration || (currentAuction.status === 'FIRST_PHASE' ? 30 : 30) - 5)" class="bid-section">
                 <div v-if="myTeam" class="team-cost-info">
                   <el-alert
                     :type="myTeam.nowCost > 0 ? 'info' : 'warning'"
@@ -194,12 +194,12 @@
                   </el-form-item>
                 </el-form>
                 <div class="bid-tip">
-                  <div>费用下限（起拍价）：¥{{ currentAuction.startingPrice?.toFixed(2) || '0.00' }}，费用上限（基础定价+3）：¥{{ currentAuction.maxPrice?.toFixed(2) || '0.00' }}</div>
+                  <div>费用下限（起拍价）：¥{{ currentAuction.startingPrice?.toFixed(2) || '0.00' }}，费用上限（基础定价+2.5）：¥{{ currentAuction.maxPrice?.toFixed(2) || '0.00' }}</div>
                   <div v-if="currentAuction.highestBidAmount">当前最高价：¥{{ currentAuction.highestBidAmount.toFixed(2) }}，最低出价：¥{{ minBidAmount.toFixed(2) }}</div>
                   <div v-else>最低出价（起拍价）：¥{{ minBidAmount.toFixed(2) }}</div>
                   <div style="margin-top: 5px;">出价必须是0.5的倍数，每次加价最少0.5</div>
-                  <div v-if="timeLeft > (currentAuction.duration || (currentAuction.status === 'FIRST_PHASE' ? 30 : 20) - 5)" style="margin-top: 5px; color: #f56c6c;">
-                    等待期：拍卖开始后5秒内不能出价（剩余等待时间：{{ Math.max(0, timeLeft - (currentAuction.duration || (currentAuction.status === 'FIRST_PHASE' ? 30 : 20) - 5)) }}秒）
+                  <div v-if="timeLeft > (currentAuction.duration || (currentAuction.status === 'FIRST_PHASE' ? 30 : 30) - 5)" style="margin-top: 5px; color: #f56c6c;">
+                    等待期：拍卖开始后5秒内不能出价（剩余等待时间：{{ Math.max(0, timeLeft - (currentAuction.duration || (currentAuction.status === 'FIRST_PHASE' ? 30 : 30) - 5)) }}秒）
                   </div>
                   <div v-if="myTeam && myTeam.nowCost !== null && myTeam.nowCost !== undefined" style="margin-top: 5px;">
                     剩余费用：¥{{ myTeam.nowCost.toFixed(2) }}，最高可出：¥{{ maxBidAmount.toFixed(1) }}（受费用上限和剩余费用限制）
@@ -591,9 +591,9 @@ const minBidAmount = computed(() => {
   }
 })
 
-// 计算最高可出价（费用上限：基础定价+3，同时考虑剩余费用）
+// 计算最高可出价（费用上限：基础定价+2.5，同时考虑剩余费用）
 const maxBidAmount = computed(() => {
-  // 费用上限：基础定价 + 3（即maxPrice）
+  // 费用上限：基础定价 + 2.5（即maxPrice）
   const maxFromAuction = currentAuction.value?.maxPrice || Infinity
   
   if (!myTeam.value || myTeam.value.nowCost === null || myTeam.value.nowCost === undefined) {
@@ -603,7 +603,7 @@ const maxBidAmount = computed(() => {
   // 将剩余费用向下取整到0.5的倍数
   const maxFromCost = Math.floor(myTeam.value.nowCost / 0.5) * 0.5
   
-  // 取两者中的较小值：剩余费用限制 和 费用上限（基础定价+3）
+  // 取两者中的较小值：剩余费用限制 和 费用上限（基础定价+2.5）
   return Math.min(maxFromCost, maxFromAuction)
 })
 
@@ -636,8 +636,8 @@ const canBid = computed(() => {
   
   // 检查是否已经过了5秒的等待期
   // 第一阶段：30秒，需要剩余时间<=25秒才能出价（即开始后5秒）
-  // 捡漏阶段：20秒，需要剩余时间<=15秒才能出价（即开始后5秒）
-  const duration = currentAuction.value.duration || (currentAuction.value.status === 'FIRST_PHASE' ? 30 : 20)
+  // 捡漏阶段：30秒，需要剩余时间<=25秒才能出价（即开始后5秒）
+  const duration = currentAuction.value.duration || (currentAuction.value.status === 'FIRST_PHASE' ? 30 : 30)
   const minTimeLeft = duration - 5 // 需要剩余时间<=这个值才能出价
   if (timeLeft.value > minTimeLeft) {
     return false // 还没到可以出价的时间
@@ -656,7 +656,7 @@ const canBid = computed(() => {
   const startingPrice = currentAuction.value.startingPrice || 0
   if (bidForm.amount < startingPrice) return false
   
-  // 检查出价是否超过最高价（费用上限：基础定价+3）
+  // 检查出价是否超过最高价（费用上限：基础定价+2.5）
   const maxPrice = currentAuction.value.maxPrice
   if (maxPrice !== null && maxPrice !== undefined && bidForm.amount > maxPrice) return false
   
