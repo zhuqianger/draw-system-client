@@ -215,7 +215,7 @@
               <template #description>
                 <p>暂无进行中的拍卖</p>
                 <p v-if="isAdmin && poolPlayers.length > 0" style="color: #909399; font-size: 14px; margin-top: 10px;">
-                  点击"摇号抽取"按钮随机抽取待拍卖池中的队员
+                  有普通池队员时随机抽取普通池；普通池清空后按顺序抽取流拍池队首
                 </p>
                 <p v-else-if="poolPlayers.length === 0" style="color: #909399; font-size: 14px; margin-top: 10px;">
                   待拍卖池为空
@@ -355,73 +355,117 @@
             </div>
           </el-card>
 
-          <!-- 待拍卖池 -->
-          <el-card class="pool-card" shadow="hover" style="margin-top: 15px; flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 200px;">
-            <template #header>
-              <div class="card-title">
-                <el-icon :size="20"><Box /></el-icon>
-                <span>待拍卖池</span>
-                <el-tag size="small" type="info">{{ poolPlayers.length }}</el-tag>
-              </div>
-            </template>
-            <div class="pool-list" style="flex: 1; overflow-y: auto; min-height: 0;">
-              <el-tooltip
-                v-for="player in poolPlayers"
-                :key="player.id"
-                placement="right"
-                :show-after="300"
-                :hide-after="0"
-                effect="dark"
-                popper-class="player-tooltip"
-              >
-                <template #content>
-                  <div class="player-tooltip-content">
-                    <div class="tooltip-header">
-                      <h4>{{ player.groupName || player.gameId || '未知' }}</h4>
-                    </div>
-                    <div class="tooltip-body">
-                      <div class="tooltip-item" v-if="player.gameId">
-                        <span class="tooltip-label">游戏ID：</span>
-                        <span class="tooltip-value">{{ player.gameId }}</span>
-                      </div>
-                      <div class="tooltip-item" v-if="player.rank">
-                        <span class="tooltip-label">段位：</span>
-                        <span class="tooltip-value">{{ player.rank }}</span>
-                      </div>
-                      <div class="tooltip-item" v-if="player.position">
-                        <span class="tooltip-label">擅长位置：</span>
-                        <span class="tooltip-value">{{ player.position }}</span>
-                      </div>
-                      <div class="tooltip-item" v-if="player.heroes">
-                        <span class="tooltip-label">自我介绍：</span>
-                        <span class="tooltip-value">{{ player.heroes }}</span>
-                      </div>
-                      <div class="tooltip-item" v-if="player.cost !== null && player.cost !== undefined">
-                        <span class="tooltip-label">费用：</span>
-                        <span class="tooltip-value highlight">¥{{ player.cost.toFixed(2) }}</span>
-                      </div>
-                      <div class="tooltip-item" v-if="isAdmin && availableTeams.length > 0" style="margin-top: 8px; justify-content: flex-end;">
-                        <el-button
-                          type="primary"
-                          size="small"
-                          @click.stop="openAssignDialog(player)"
-                        >
-                          分配到指定队伍
-                        </el-button>
-                      </div>
-                    </div>
-                  </div>
-                </template>
-                <el-tag
-                  class="pool-item"
-                  size="small"
+          <!-- 待拍卖：普通池与流拍池分开展示 -->
+          <div class="pools-stack">
+            <el-card
+              v-for="sec in poolSections"
+              :key="sec.key"
+              shadow="hover"
+              :class="['pool-card', `pool-card--${sec.key}`]"
+            >
+              <template #header>
+                <div class="card-title pool-section-title">
+                  <el-icon :size="20"><component :is="sec.icon" /></el-icon>
+                  <span>{{ sec.title }}</span>
+                  <el-tag size="small" :type="sec.key === 'normal' ? 'success' : 'warning'">
+                    {{ sec.players.length }} 人
+                  </el-tag>
+                </div>
+              </template>
+              <p class="pool-section-hint">{{ sec.hint }}</p>
+              <div class="pool-list pool-list--scroll">
+                <el-tooltip
+                  v-for="player in sec.players"
+                  :key="`${sec.key}-${player.id}`"
+                  placement="left"
+                  :show-after="450"
+                  :hide-after="500"
+                  :enterable="true"
+                  effect="dark"
+                  popper-class="player-tooltip"
                 >
-                  {{ player.groupName || player.gameId }}
-                </el-tag>
-              </el-tooltip>
-              <el-empty v-if="poolPlayers.length === 0" description="待拍卖池为空" :image-size="80" />
-            </div>
-          </el-card>
+                  <template #content>
+                    <div class="player-tooltip-content">
+                      <div class="tooltip-header">
+                        <h4>{{ player.groupName || player.gameId || '未知' }}</h4>
+                      </div>
+                      <div class="tooltip-body">
+                        <div class="tooltip-item" v-if="sec.key === 'failed'">
+                          <span class="tooltip-label">队列序号：</span>
+                          <span class="tooltip-value">#{{ player.failedOrder ?? '-' }}（队首优先）</span>
+                        </div>
+                        <div class="tooltip-item" v-if="player.gameId">
+                          <span class="tooltip-label">游戏ID：</span>
+                          <span class="tooltip-value">{{ player.gameId }}</span>
+                        </div>
+                        <div class="tooltip-item" v-if="player.rank">
+                          <span class="tooltip-label">段位：</span>
+                          <span class="tooltip-value">{{ player.rank }}</span>
+                        </div>
+                        <div class="tooltip-item" v-if="player.position">
+                          <span class="tooltip-label">擅长位置：</span>
+                          <span class="tooltip-value">{{ player.position }}</span>
+                        </div>
+                        <div class="tooltip-item" v-if="player.heroes">
+                          <span class="tooltip-label">自我介绍：</span>
+                          <span class="tooltip-value">{{ player.heroes }}</span>
+                        </div>
+                        <div class="tooltip-item" v-if="player.cost !== null && player.cost !== undefined">
+                          <span class="tooltip-label">费用：</span>
+                          <span class="tooltip-value highlight">¥{{ player.cost.toFixed(2) }}</span>
+                        </div>
+                        <div class="tooltip-item" v-if="isAdmin && availableTeams.length > 0" style="margin-top: 8px; justify-content: flex-end;">
+                          <el-button
+                            type="primary"
+                            size="small"
+                            @click.stop="openAssignDialog(player)"
+                          >
+                            分配到指定队伍
+                          </el-button>
+                        </div>
+                        <div v-if="isAdmin" class="pool-move-actions" @click.stop>
+                          <el-button
+                            v-if="sec.key === 'normal'"
+                            type="warning"
+                            size="small"
+                            :loading="poolMovingId === player.id"
+                            @click="handleMoveToFailedPool(player)"
+                          >
+                            移到流拍池
+                          </el-button>
+                          <el-button
+                            v-if="sec.key === 'failed'"
+                            type="success"
+                            size="small"
+                            :loading="poolMovingId === player.id"
+                            @click="handleMoveToNormalPool(player)"
+                          >
+                            移回普通池
+                          </el-button>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                  <el-tag
+                    class="pool-item"
+                    :class="sec.key === 'failed' ? 'pool-item--failed' : 'pool-item--normal'"
+                    size="small"
+                    :type="sec.key === 'failed' ? 'warning' : 'info'"
+                  >
+                    <template v-if="sec.key === 'failed'">
+                      <span class="pool-item-order">#{{ player.failedOrder ?? '?' }}</span>
+                    </template>
+                    {{ player.groupName || player.gameId }}
+                  </el-tag>
+                </el-tooltip>
+                <el-empty
+                  v-if="sec.players.length === 0"
+                  :description="sec.emptyText"
+                  :image-size="64"
+                />
+              </div>
+            </el-card>
+          </div>
         </el-col>
       </el-row>
 
@@ -503,7 +547,7 @@ import {
 } from '@element-plus/icons-vue'
 import { getSession } from '../api/session'
 import { placeBid, getCurrentAuction, getBids, createAuction, beginAuction, finishAuction, getPickRecords, rollbackByPickRecord } from '../api/auction'
-import { getPoolPlayers, getTeams, exportTeams, assignPlayerToTeam, updateTeamCost, removePlayerFromTeam } from '../api/player'
+import { getPoolPlayers, getTeams, exportTeams, assignPlayerToTeam, updateTeamCost, removePlayerFromTeam, changePlayerPool } from '../api/player'
 import { connectWebSocket, disconnectWebSocket } from '../utils/websocket'
 
 const route = useRoute()
@@ -533,6 +577,7 @@ const assignForm = reactive({
 })
 const updateCostDialogVisible = ref(false)
 const updatingCost = ref(false)
+const poolMovingId = ref(null)
 const updateCostForm = reactive({
   teamId: null,
   teamName: '',
@@ -575,6 +620,58 @@ const myTeam = computed(() => {
 const availableTeams = computed(() => {
   return teams.value.filter(t => (t.playerCount ?? 0) < 4)
 })
+
+/** 逻辑上与接口数据一致：普通池 / 流拍池分列 */
+const normalPoolPlayers = computed(() =>
+  poolPlayers.value.filter(p => !p.poolType || p.poolType === 'NORMAL')
+)
+const failedPoolPlayers = computed(() =>
+  [...poolPlayers.value.filter(p => p.poolType === 'FAILED')].sort(
+    (a, b) => (a.failedOrder ?? 999999) - (b.failedOrder ?? 999999)
+  )
+)
+
+const poolSections = computed(() => [
+  {
+    key: 'normal',
+    title: '普通池',
+    hint: '摇号优先从此池随机抽取；队员流拍后会进入下方流拍池。',
+    icon: Box,
+    players: normalPoolPlayers.value,
+    emptyText: '普通池暂无队员'
+  },
+  {
+    key: 'failed',
+    title: '流拍池',
+    hint: '仅当普通池为空时，按序号从队首依次抽取；在本池再次流拍会排到队尾。',
+    icon: List,
+    players: failedPoolPlayers.value,
+    emptyText: '流拍池暂无队员'
+  }
+])
+
+const isNormalPoolPlayer = (p) => !p.poolType || p.poolType === 'NORMAL'
+
+/** 摇号：优先随机普通池；否则取流拍池队首。重新抽选时可尽量避开上一人 */
+const selectPlayerForDraw = (players, { preferOtherThanId } = {}) => {
+  const normalsAll = players.filter(isNormalPoolPlayer)
+  let normals = normalsAll
+  if (preferOtherThanId != null && normalsAll.length > 1) {
+    const filtered = normalsAll.filter(p => p.id !== preferOtherThanId)
+    if (filtered.length > 0) normals = filtered
+  }
+  if (normals.length > 0) {
+    return normals[Math.floor(Math.random() * normals.length)]
+  }
+  let failed = players
+    .filter(p => p.poolType === 'FAILED')
+    .sort((a, b) => (a.failedOrder ?? 999999) - (b.failedOrder ?? 999999))
+  if (preferOtherThanId != null && failed.length > 1) {
+    const filtered = failed.filter(p => p.id !== preferOtherThanId)
+    if (filtered.length > 0) failed = filtered
+  }
+  return failed[0] ?? null
+}
 
 // 计算最低出价（费用下限：起拍价）
 const minBidAmount = computed(() => {
@@ -813,6 +910,48 @@ const loadPoolPlayers = async () => {
   }
 }
 
+const handleMoveToFailedPool = async (player) => {
+  poolMovingId.value = player.id
+  try {
+    const res = await changePlayerPool({
+      sessionId: Number(sessionId),
+      playerId: player.id,
+      targetPoolType: 'FAILED'
+    })
+    if (res.code === 200) {
+      ElMessage.success('已移至流拍池')
+      loadPoolPlayers()
+    } else {
+      ElMessage.error(res.message || '操作失败')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '操作失败')
+  } finally {
+    poolMovingId.value = null
+  }
+}
+
+const handleMoveToNormalPool = async (player) => {
+  poolMovingId.value = player.id
+  try {
+    const res = await changePlayerPool({
+      sessionId: Number(sessionId),
+      playerId: player.id,
+      targetPoolType: 'NORMAL'
+    })
+    if (res.code === 200) {
+      ElMessage.success('已移回普通池')
+      loadPoolPlayers()
+    } else {
+      ElMessage.error(res.message || '操作失败')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '操作失败')
+  } finally {
+    poolMovingId.value = null
+  }
+}
+
 const handleRandomDraw = async () => {
   if (poolPlayers.value.length === 0) {
     ElMessage.warning('待拍卖池为空，无法摇号')
@@ -821,10 +960,12 @@ const handleRandomDraw = async () => {
   
   drawing.value = true
   try {
-    // 随机选择一个player
-    const randomIndex = Math.floor(Math.random() * poolPlayers.value.length)
-    const selectedPlayer = poolPlayers.value[randomIndex]
-    
+    const selectedPlayer = selectPlayerForDraw(poolPlayers.value, {})
+    if (!selectedPlayer) {
+      ElMessage.warning('没有可抽取的队员')
+      return
+    }
+
     const res = await createAuction(sessionId, selectedPlayer.id)
     if (res.code === 200) {
       ElMessage.success(`已抽取：${selectedPlayer.groupName || selectedPlayer.gameId}，等待开始拍卖`)
@@ -909,6 +1050,7 @@ const handleRedraw = async () => {
 
   redrawing.value = true
   try {
+    const prevPlayerId = currentAuction.value.playerId
     // 结束当前未开始的拍卖，把该队员放回待拍卖池
     const resFinish = await finishAuction(currentAuction.value.id, false)
     if (resFinish.code !== 200) {
@@ -924,9 +1066,12 @@ const handleRedraw = async () => {
       return
     }
 
-    // 随机选择一个新的队员
-    const randomIndex = Math.floor(Math.random() * poolPlayers.value.length)
-    const selectedPlayer = poolPlayers.value[randomIndex]
+    const selectedPlayer = selectPlayerForDraw(poolPlayers.value, { preferOtherThanId: prevPlayerId })
+    if (!selectedPlayer) {
+      ElMessage.warning('没有可抽取的队员')
+      await loadAuctionData()
+      return
+    }
 
     const resCreate = await createAuction(sessionId, selectedPlayer.id)
     if (resCreate.code === 200) {
@@ -1580,6 +1725,53 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
+.pools-stack {
+  margin-top: 15px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pools-stack .pool-card {
+  flex: 1;
+  min-height: 100px;
+  overflow: hidden;
+}
+
+.pool-section-hint {
+  margin: 0 0 10px 0;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.5;
+}
+
+.pool-list--scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.pool-section-title {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.pool-item-order {
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+.pool-card--normal {
+  border-left: 4px solid #67c23a;
+}
+
+.pool-card--failed {
+  border-left: 4px solid #e6a23c;
+}
+
 .auction-card:hover, .bids-card:hover, .picks-card:hover, .teams-card:hover, .pool-card:hover {
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
   transform: translateY(-2px);
@@ -1992,5 +2184,15 @@ onUnmounted(() => {
   color: #67c23a;
   font-weight: 700;
   font-size: 14px;
+}
+
+.pool-move-actions {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 </style>

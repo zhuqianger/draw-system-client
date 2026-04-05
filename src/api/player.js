@@ -45,3 +45,11 @@ export const removePlayerFromTeam = (data) => {
     data
   })
 }
+
+export const changePlayerPool = (data) => {
+  return request({
+    url: '/player/pool/change',
+    method: 'post',
+    data
+  })
+}
