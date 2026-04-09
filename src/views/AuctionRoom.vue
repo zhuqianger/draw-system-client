@@ -1063,6 +1063,18 @@ const mapEventToRefreshFlags = (eventType) => {
   if (eventType === 'PLAYER_ASSIGNED') {
     return { auction: true, teams: true, poolPlayers: true, pickRecords: true }
   }
+  if (eventType === 'TEAM_COST_UPDATED') {
+    return { teams: true }
+  }
+  if (eventType === 'PLAYER_POOL_CHANGED') {
+    return { poolPlayers: true }
+  }
+  if (eventType === 'PLAYER_REMOVED_FROM_TEAM') {
+    return { teams: true, poolPlayers: true, pickRecords: true }
+  }
+  if (eventType === 'ROLLBACK_COMPLETED') {
+    return { auction: true, teams: true, poolPlayers: true, pickRecords: true, bidHistory: true }
+  }
   if (eventType === 'SYSTEM_CHANGED' || eventType === 'SYSTEM_STATUS') {
     return { auction: true, teams: true, poolPlayers: true, pickRecords: true }
   }
@@ -1141,6 +1153,69 @@ const applyPlayerAssignedDelta = (data) => {
   return applied
 }
 
+const applyTeamCostUpdatedDelta = (data) => {
+  if (!data?.team || !data.team.id) return false
+  const idx = teams.value.findIndex(t => t.id === data.team.id)
+  if (idx >= 0) {
+    teams.value.splice(idx, 1, data.team)
+  } else {
+    teams.value.push(data.team)
+  }
+  return true
+}
+
+const upsertPoolPlayer = (player) => {
+  if (!player || !player.id) return false
+  if (player.status && player.status !== 'POOL') {
+    poolPlayers.value = poolPlayers.value.filter(p => p.id !== player.id)
+    return true
+  }
+  const idx = poolPlayers.value.findIndex(p => p.id === player.id)
+  if (idx >= 0) {
+    poolPlayers.value.splice(idx, 1, player)
+  } else {
+    poolPlayers.value.push(player)
+  }
+  return true
+}
+
+const applyPlayerPoolChangedDelta = (data) => {
+  return upsertPoolPlayer(data?.player)
+}
+
+const applyPlayerRemovedFromTeamDelta = (data) => {
+  if (!data) return false
+  let applied = false
+
+  if (data.team && data.team.id) {
+    const idx = teams.value.findIndex(t => t.id === data.team.id)
+    if (idx >= 0) {
+      teams.value.splice(idx, 1, data.team)
+    } else {
+      teams.value.push(data.team)
+    }
+    applied = true
+  }
+
+  if (data.poolPlayer) {
+    applied = upsertPoolPlayer(data.poolPlayer) || applied
+  }
+
+  if (data.pickRecordRemoved?.teamId && data.pickRecordRemoved?.playerId) {
+    pickRecords.value = pickRecords.value.filter(
+      r => !(r.teamId === data.pickRecordRemoved.teamId && r.playerId === data.pickRecordRemoved.playerId)
+    )
+    applied = true
+  }
+  return applied
+}
+
+const applyRollbackCompletedDelta = (data) => {
+  if (!data?.systemStatus) return false
+  applySystemStatusSnapshot(data.systemStatus)
+  return true
+}
+
 const applyIncrementalEvent = (event) => {
   const data = event?.data
   if (!data) return false
@@ -1153,6 +1228,18 @@ const applyIncrementalEvent = (event) => {
   }
   if (event.eventType === 'PLAYER_ASSIGNED') {
     return applyPlayerAssignedDelta(data)
+  }
+  if (event.eventType === 'TEAM_COST_UPDATED') {
+    return applyTeamCostUpdatedDelta(data)
+  }
+  if (event.eventType === 'PLAYER_POOL_CHANGED') {
+    return applyPlayerPoolChangedDelta(data)
+  }
+  if (event.eventType === 'PLAYER_REMOVED_FROM_TEAM') {
+    return applyPlayerRemovedFromTeamDelta(data)
+  }
+  if (event.eventType === 'ROLLBACK_COMPLETED') {
+    return applyRollbackCompletedDelta(data)
   }
   return false
 }
@@ -1206,7 +1293,7 @@ const handleMoveToFailedPool = async (player) => {
     })
     if (res.code === 200) {
       ElMessage.success('已移至流拍池')
-      scheduleFallbackRefresh(['SYSTEM_CHANGED'], { poolPlayers: true, teams: true, pickRecords: true })
+      scheduleFallbackRefresh(['PLAYER_POOL_CHANGED'], { poolPlayers: true })
     } else {
       ElMessage.error(res.message || '操作失败')
     }
@@ -1227,7 +1314,7 @@ const handleMoveToNormalPool = async (player) => {
     })
     if (res.code === 200) {
       ElMessage.success('已移回普通池')
-      scheduleFallbackRefresh(['SYSTEM_CHANGED'], { poolPlayers: true, teams: true, pickRecords: true })
+      scheduleFallbackRefresh(['PLAYER_POOL_CHANGED'], { poolPlayers: true })
     } else {
       ElMessage.error(res.message || '操作失败')
     }
@@ -1609,7 +1696,7 @@ const handleUpdateCostConfirm = async () => {
     if (res.code === 200) {
       ElMessage.success(res.message || '队伍费用已更新')
       updateCostDialogVisible.value = false
-      scheduleFallbackRefresh(['SYSTEM_CHANGED'], { teams: true, poolPlayers: true, pickRecords: true })
+      scheduleFallbackRefresh(['TEAM_COST_UPDATED'], { teams: true })
     } else {
       ElMessage.error(res.message || '更新失败')
     }
@@ -1660,7 +1747,7 @@ const handleAssignConfirm = async () => {
     if (res.code === 200) {
       ElMessage.success(res.message || '分配成功')
       assignDialogVisible.value = false
-      scheduleFallbackRefresh(['PLAYER_ASSIGNED', 'SYSTEM_CHANGED'], {
+      scheduleFallbackRefresh(['PLAYER_ASSIGNED'], {
         auction: true,
         teams: true,
         poolPlayers: true,
@@ -1705,8 +1792,7 @@ const handleTeamPlayerClick = async (team, player) => {
     })
     if (res.code === 200) {
       ElMessage.success(res.message || '已移除队员')
-      scheduleFallbackRefresh(['SYSTEM_CHANGED'], {
-        auction: true,
+      scheduleFallbackRefresh(['PLAYER_REMOVED_FROM_TEAM'], {
         teams: true,
         poolPlayers: true,
         pickRecords: true
@@ -1744,11 +1830,12 @@ const handleRollback = async (record) => {
     const res = await rollbackByPickRecord(record.id)
     if (res.code === 200) {
       ElMessage.success(res.message || '回退成功')
-      scheduleFallbackRefresh(['SYSTEM_CHANGED'], {
+      scheduleFallbackRefresh(['ROLLBACK_COMPLETED'], {
         auction: true,
         teams: true,
         poolPlayers: true,
-        pickRecords: true
+        pickRecords: true,
+        bidHistory: true
       })
     } else {
       ElMessage.error(res.message || '回退失败')
