@@ -103,64 +103,42 @@ function doConnect() {
         subscriptions = []
 
         // 订阅拍卖相关消息
-        if (savedCallbacks && savedCallbacks.onAuctionUpdate) {
-          const sub = stompClient.subscribe('/topic/auction', (message) => {
-            try {
-              const data = JSON.parse(message.body)
-              if (data.code === 200) {
-                savedCallbacks.onAuctionUpdate(data)
-              }
-            } catch (e) {
-              console.error('处理拍卖消息失败:', e)
-            }
-          })
-          subscriptions.push(sub)
-        }
+        // 统一订阅事件消息：由页面侧进行事件合并与最小化刷新
+        const eventSub = stompClient.subscribe('/topic/event', (message) => {
+          try {
+            const res = JSON.parse(message.body)
+            if (res.code !== 200 || !res.data) return
 
-        // 订阅竞价消息
-        if (savedCallbacks && savedCallbacks.onBidUpdate) {
-          const sub = stompClient.subscribe('/topic/bid', (message) => {
-            try {
-              const data = JSON.parse(message.body)
-              if (data.code === 200) {
-                savedCallbacks.onBidUpdate(data)
-              }
-            } catch (e) {
-              console.error('处理竞价消息失败:', e)
+            const event = res.data
+            if (
+              savedSessionId &&
+              event.sessionId !== null &&
+              event.sessionId !== undefined &&
+              String(event.sessionId) !== String(savedSessionId)
+            ) {
+              return
             }
-          })
-          subscriptions.push(sub)
-        }
 
-        // 订阅队员分配消息
-        if (savedCallbacks && savedCallbacks.onPlayerAssigned) {
-          const sub = stompClient.subscribe('/topic/assignment', (message) => {
-            try {
-              const data = JSON.parse(message.body)
-              if (data.code === 200) {
-                savedCallbacks.onPlayerAssigned(data)
-              }
-            } catch (e) {
-              console.error('处理分配消息失败:', e)
+            if (savedCallbacks && savedCallbacks.onEvent) {
+              savedCallbacks.onEvent(event)
             }
-          })
-          subscriptions.push(sub)
-        }
 
-        // 订阅系统状态更新
-        if (savedCallbacks && savedCallbacks.onSystemStatusUpdate) {
-          const sub = stompClient.subscribe('/topic/system-status', (message) => {
-            try {
-              const data = JSON.parse(message.body)
-              if (data.code === 200) {
-                savedCallbacks.onSystemStatusUpdate(data.data)
-              }
-            } catch (e) {
-              console.error('处理系统状态消息失败:', e)
+            // 兼容旧回调（逐步迁移）
+            if (savedCallbacks && savedCallbacks.onAuctionUpdate &&
+              (event.eventType === 'AUCTION_STARTED' || event.eventType === 'AUCTION_FINISHED')) {
+              savedCallbacks.onAuctionUpdate(event)
             }
-          })
-          subscriptions.push(sub)
-        }
+            if (savedCallbacks && savedCallbacks.onBidUpdate && event.eventType === 'BID_PLACED') {
+              savedCallbacks.onBidUpdate(event)
+            }
+            if (savedCallbacks && savedCallbacks.onPlayerAssigned && event.eventType === 'PLAYER_ASSIGNED') {
+              savedCallbacks.onPlayerAssigned(event)
+            }
+          } catch (e) {
+            console.error('处理统一事件消息失败:', e)
+          }
+        })
+        subscriptions.push(eventSub)
 
         // 启动心跳检测
         startHeartbeat()

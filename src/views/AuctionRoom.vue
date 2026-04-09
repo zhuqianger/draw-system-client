@@ -585,6 +585,17 @@ const updateCostForm = reactive({
 })
 const timeLeft = ref(0)
 let timer = null
+let refreshQueueTimer = null
+let refreshInFlight = false
+const pendingRefresh = {
+  auction: false,
+  teams: false,
+  poolPlayers: false,
+  pickRecords: false,
+  bidHistory: false
+}
+const recentEventTypeAt = new Map()
+const recentEventIds = new Set()
 
 const userInfo = computed(() => {
   const info = sessionStorage.getItem('userInfo')
@@ -910,6 +921,114 @@ const loadPoolPlayers = async () => {
   }
 }
 
+const enqueueRefresh = (flags, delay = 80) => {
+  if (!flags) return
+
+  pendingRefresh.auction = pendingRefresh.auction || !!flags.auction
+  pendingRefresh.teams = pendingRefresh.teams || !!flags.teams
+  pendingRefresh.poolPlayers = pendingRefresh.poolPlayers || !!flags.poolPlayers
+  pendingRefresh.pickRecords = pendingRefresh.pickRecords || !!flags.pickRecords
+  pendingRefresh.bidHistory = pendingRefresh.bidHistory || !!flags.bidHistory
+
+  if (refreshQueueTimer) {
+    clearTimeout(refreshQueueTimer)
+  }
+
+  refreshQueueTimer = setTimeout(() => {
+    refreshQueueTimer = null
+    flushRefreshQueue()
+  }, delay)
+}
+
+const flushRefreshQueue = async () => {
+  if (refreshInFlight) return
+
+  const plan = {
+    auction: pendingRefresh.auction,
+    teams: pendingRefresh.teams,
+    poolPlayers: pendingRefresh.poolPlayers,
+    pickRecords: pendingRefresh.pickRecords,
+    // loadAuctionData 内部已包含 loadBidHistory，避免重复请求
+    bidHistory: pendingRefresh.bidHistory && !pendingRefresh.auction
+  }
+
+  pendingRefresh.auction = false
+  pendingRefresh.teams = false
+  pendingRefresh.poolPlayers = false
+  pendingRefresh.pickRecords = false
+  pendingRefresh.bidHistory = false
+
+  refreshInFlight = true
+  try {
+    const tasks = []
+    if (plan.auction) tasks.push(loadAuctionData())
+    if (plan.teams) tasks.push(loadTeams())
+    if (plan.poolPlayers) tasks.push(loadPoolPlayers())
+    if (plan.pickRecords) tasks.push(loadPickRecords())
+    await Promise.all(tasks)
+
+    if (plan.bidHistory && currentAuction.value?.id) {
+      await loadBidHistory(currentAuction.value.id)
+    }
+  } finally {
+    refreshInFlight = false
+    if (
+      pendingRefresh.auction ||
+      pendingRefresh.teams ||
+      pendingRefresh.poolPlayers ||
+      pendingRefresh.pickRecords ||
+      pendingRefresh.bidHistory
+    ) {
+      enqueueRefresh({}, 0)
+    }
+  }
+}
+
+const scheduleFallbackRefresh = (expectedEventTypes, flags, delay = 1200) => {
+  const startAt = Date.now()
+  setTimeout(() => {
+    const hasExpectedEvent = expectedEventTypes.some(type => (recentEventTypeAt.get(type) || 0) >= startAt)
+    if (!hasExpectedEvent) {
+      enqueueRefresh(flags, 0)
+    }
+  }, delay)
+}
+
+const mapEventToRefreshFlags = (eventType) => {
+  if (eventType === 'BID_PLACED') {
+    return { auction: true, teams: true }
+  }
+  if (eventType === 'AUCTION_STARTED' || eventType === 'AUCTION_FINISHED') {
+    return { auction: true, teams: true, poolPlayers: true }
+  }
+  if (eventType === 'PLAYER_ASSIGNED') {
+    return { auction: true, teams: true, poolPlayers: true, pickRecords: true }
+  }
+  if (eventType === 'SYSTEM_CHANGED' || eventType === 'SYSTEM_STATUS') {
+    return { auction: true, teams: true, poolPlayers: true, pickRecords: true }
+  }
+  // 兜底：未知事件按系统变更处理
+  return { auction: true, teams: true, poolPlayers: true, pickRecords: true }
+}
+
+const handleWebSocketEvent = (event) => {
+  if (!event || !event.eventType) return
+
+  if (event.eventId) {
+    if (recentEventIds.has(event.eventId)) {
+      return
+    }
+    recentEventIds.add(event.eventId)
+    if (recentEventIds.size > 200) {
+      const oldest = recentEventIds.values().next().value
+      if (oldest) recentEventIds.delete(oldest)
+    }
+  }
+
+  recentEventTypeAt.set(event.eventType, Date.now())
+  enqueueRefresh(mapEventToRefreshFlags(event.eventType), 80)
+}
+
 const handleMoveToFailedPool = async (player) => {
   poolMovingId.value = player.id
   try {
@@ -920,7 +1039,7 @@ const handleMoveToFailedPool = async (player) => {
     })
     if (res.code === 200) {
       ElMessage.success('已移至流拍池')
-      loadPoolPlayers()
+      scheduleFallbackRefresh(['SYSTEM_CHANGED'], { poolPlayers: true, teams: true, pickRecords: true })
     } else {
       ElMessage.error(res.message || '操作失败')
     }
@@ -941,7 +1060,7 @@ const handleMoveToNormalPool = async (player) => {
     })
     if (res.code === 200) {
       ElMessage.success('已移回普通池')
-      loadPoolPlayers()
+      scheduleFallbackRefresh(['SYSTEM_CHANGED'], { poolPlayers: true, teams: true, pickRecords: true })
     } else {
       ElMessage.error(res.message || '操作失败')
     }
@@ -969,8 +1088,7 @@ const handleRandomDraw = async () => {
     const res = await createAuction(sessionId, selectedPlayer.id)
     if (res.code === 200) {
       ElMessage.success(`已抽取：${selectedPlayer.groupName || selectedPlayer.gameId}，等待开始拍卖`)
-      loadAuctionData()
-      loadPoolPlayers()
+      scheduleFallbackRefresh(['AUCTION_STARTED'], { auction: true, poolPlayers: true, teams: true })
     } else {
       ElMessage.error(res.message || '摇号失败')
     }
@@ -989,7 +1107,7 @@ const handleBeginAuction = async () => {
     const res = await beginAuction(currentAuction.value.id)
     if (res.code === 200) {
       ElMessage.success('拍卖已开始')
-      loadAuctionData()
+      scheduleFallbackRefresh(['AUCTION_STARTED'], { auction: true, teams: true, poolPlayers: true })
     } else {
       ElMessage.error(res.message || '开始拍卖失败')
     }
@@ -1004,10 +1122,6 @@ const handleBeginAuction = async () => {
 const handleFinishAuction = async () => {
   if (!currentAuction.value) return
   
-  // 保存当前价格数据，避免在刷新过程中丢失
-  const savedStartingPrice = currentAuction.value.startingPrice
-  const savedMaxPrice = currentAuction.value.maxPrice
-  
   finishing.value = true
   try {
     const res = await finishAuction(currentAuction.value.id, false) // autoFinish=false，管理员手动结束
@@ -1017,13 +1131,12 @@ const handleFinishAuction = async () => {
       } else {
         ElMessage.success('拍卖已结束')
       }
-      // 延迟一小段时间再刷新数据，避免与WebSocket推送冲突
-      setTimeout(() => {
-        loadAuctionData()
-        loadTeams()
-        loadPoolPlayers()
-        loadPickRecords()
-      }, 100)
+      scheduleFallbackRefresh(['AUCTION_FINISHED', 'AUCTION_STARTED'], {
+        auction: true,
+        teams: true,
+        poolPlayers: true,
+        pickRecords: true
+      })
     } else {
       ElMessage.error(res.message || '结束拍卖失败')
     }
@@ -1076,10 +1189,7 @@ const handleRedraw = async () => {
     const resCreate = await createAuction(sessionId, selectedPlayer.id)
     if (resCreate.code === 200) {
       ElMessage.success(`已重新抽选：${selectedPlayer.groupName || selectedPlayer.gameId || '未知'}，等待开始拍卖`)
-      await Promise.all([
-        loadAuctionData(),
-        loadPoolPlayers()
-      ])
+      scheduleFallbackRefresh(['AUCTION_STARTED'], { auction: true, poolPlayers: true, teams: true })
     } else {
       ElMessage.error(resCreate.message || '重新抽选失败')
       await loadAuctionData()
@@ -1112,10 +1222,7 @@ const handleBid = async () => {
         ElMessage.success('出价成功')
       }
       bidForm.amount = 0
-      // 立即刷新数据，获取更新后的endTime（如果达到最高价，endTime会被设置为当前时间）
-      loadAuctionData()
-      loadBidHistory(currentAuction.value.id)
-      loadTeams() // 更新队伍信息（费用可能变化）
+      scheduleFallbackRefresh(['BID_PLACED'], { auction: true, teams: true })
     } else {
       ElMessage.error(res.message || '出价失败')
     }
@@ -1335,11 +1442,7 @@ const handleUpdateCostConfirm = async () => {
     if (res.code === 200) {
       ElMessage.success(res.message || '队伍费用已更新')
       updateCostDialogVisible.value = false
-      await Promise.all([
-        loadTeams(),
-        loadPoolPlayers(),
-        loadPickRecords()
-      ])
+      scheduleFallbackRefresh(['SYSTEM_CHANGED'], { teams: true, poolPlayers: true, pickRecords: true })
     } else {
       ElMessage.error(res.message || '更新失败')
     }
@@ -1390,11 +1493,12 @@ const handleAssignConfirm = async () => {
     if (res.code === 200) {
       ElMessage.success(res.message || '分配成功')
       assignDialogVisible.value = false
-      await Promise.all([
-        loadTeams(),
-        loadPoolPlayers(),
-        loadPickRecords()
-      ])
+      scheduleFallbackRefresh(['PLAYER_ASSIGNED', 'SYSTEM_CHANGED'], {
+        auction: true,
+        teams: true,
+        poolPlayers: true,
+        pickRecords: true
+      })
     } else {
       ElMessage.error(res.message || '分配失败')
     }
@@ -1434,11 +1538,12 @@ const handleTeamPlayerClick = async (team, player) => {
     })
     if (res.code === 200) {
       ElMessage.success(res.message || '已移除队员')
-      await Promise.all([
-        loadTeams(),
-        loadPoolPlayers(),
-        loadPickRecords()
-      ])
+      scheduleFallbackRefresh(['SYSTEM_CHANGED'], {
+        auction: true,
+        teams: true,
+        poolPlayers: true,
+        pickRecords: true
+      })
     } else {
       ElMessage.error(res.message || '移除失败')
     }
@@ -1472,13 +1577,12 @@ const handleRollback = async (record) => {
     const res = await rollbackByPickRecord(record.id)
     if (res.code === 200) {
       ElMessage.success(res.message || '回退成功')
-      // 回退会通过 WebSocket 推送系统状态，这里再主动刷新一遍以确保一致性
-      await Promise.all([
-        loadAuctionData(),
-        loadTeams(),
-        loadPoolPlayers(),
-        loadPickRecords()
-      ])
+      scheduleFallbackRefresh(['SYSTEM_CHANGED'], {
+        auction: true,
+        teams: true,
+        poolPlayers: true,
+        pickRecords: true
+      })
     } else {
       ElMessage.error(res.message || '回退失败')
     }
@@ -1487,103 +1591,6 @@ const handleRollback = async (record) => {
   } finally {
     rollingBack.value = false
   }
-}
-
-// WebSocket回调函数
-const handleAuctionUpdate = (data) => {
-  // 拍卖开始或结束 - 不弹提示，只刷新数据（避免重复提示）
-  // 使用防抖，避免频繁刷新导致闪烁
-  if (handleAuctionUpdate.timer) {
-    clearTimeout(handleAuctionUpdate.timer)
-  }
-  handleAuctionUpdate.timer = setTimeout(() => {
-    loadAuctionData()
-    loadTeams()
-    loadPoolPlayers()
-    handleAuctionUpdate.timer = null
-  }, 50) // 50ms防抖
-}
-
-const handleBidUpdate = (data) => {
-  // 有新竞价 - 不弹提示，只刷新数据（避免重复提示）
-  if (currentAuction.value) {
-    loadAuctionData()
-    loadBidHistory(currentAuction.value.id)
-  }
-}
-
-const handlePlayerAssigned = (data) => {
-  // 队员已分配 - 不弹提示，只刷新数据（避免重复提示）
-  loadAuctionData()
-  loadTeams()
-  loadPoolPlayers()
-  loadPickRecords()
-}
-
-const handleSystemStatusUpdate = (status) => {
-  // 系统状态更新（包含完整数据）
-  if (status.currentAuction) {
-    const oldStatus = currentAuction.value?.status
-    const oldStartingPrice = currentAuction.value?.startingPrice
-    const oldMaxPrice = currentAuction.value?.maxPrice
-    const oldId = currentAuction.value?.id
-    const oldEndTime = currentAuction.value?.endTime
-    
-    // 如果新数据和旧数据是同一个拍卖，使用智能合并策略
-    const isSameAuction = oldId && status.currentAuction.id === oldId
-    
-    if (isSameAuction) {
-      // 同一个拍卖，智能合并数据，保留价格信息
-      const newData = status.currentAuction
-      // 如果新数据中价格为空或无效，但旧数据有值，保持旧值
-      if ((newData.startingPrice == null || newData.startingPrice === 0) && oldStartingPrice != null && oldStartingPrice !== 0) {
-        newData.startingPrice = oldStartingPrice
-      }
-      if ((newData.maxPrice == null || newData.maxPrice === 0) && oldMaxPrice != null && oldMaxPrice !== 0) {
-        newData.maxPrice = oldMaxPrice
-      }
-      
-      // 如果旧数据已经过期，且新数据的endTime没有变化或更早，保持过期状态
-      if (isTimeExpired && oldEndTime) {
-        const newEndTime = newData.endTime ? new Date(newData.endTime).getTime() : null
-        const oldEndTimeMs = new Date(oldEndTime).getTime()
-        // 如果新endTime不存在或更早/相同，保持过期状态
-        if (!newEndTime || newEndTime <= oldEndTimeMs) {
-          // 保持过期状态，不更新倒计时
-          currentAuction.value = newData
-          return // 提前返回，不更新倒计时
-        }
-      }
-      
-      currentAuction.value = newData
-    } else {
-      // 不同的拍卖，直接使用新数据，重置过期标记
-      isTimeExpired = false
-      currentAuction.value = status.currentAuction
-    }
-    
-    // 如果状态发生变化，更新倒计时
-    if (currentAuction.value.endTime) {
-      updateTimeLeft()
-    }
-    
-    // 如果从第一阶段进入捡漏环节，重置过期标记并更新倒计时
-    if (oldStatus === 'FIRST_PHASE' && currentAuction.value.status === 'PICKUP_PHASE') {
-      isTimeExpired = false
-      updateTimeLeft()
-    }
-    
-    if (currentAuction.value.id) {
-      loadBidHistory(currentAuction.value.id)
-    }
-  } else {
-    currentAuction.value = null
-    isTimeExpired = false
-  }
-  // 可以更新teams和poolPlayers，但为了保持sessionId过滤，还是调用API
-  loadTeams()
-  loadPoolPlayers()
-  loadPickRecords()
 }
 
 onMounted(() => {
@@ -1595,16 +1602,17 @@ onMounted(() => {
 
   // 连接WebSocket
   connectWebSocket(sessionId, {
-    onAuctionUpdate: handleAuctionUpdate,
-    onBidUpdate: handleBidUpdate,
-    onPlayerAssigned: handlePlayerAssigned,
-    onSystemStatusUpdate: handleSystemStatusUpdate
+    onEvent: handleWebSocketEvent
   })
 })
 
 onUnmounted(() => {
   if (timer) {
     clearInterval(timer)
+  }
+  if (refreshQueueTimer) {
+    clearTimeout(refreshQueueTimer)
+    refreshQueueTimer = null
   }
   // 断开WebSocket连接
   disconnectWebSocket()
