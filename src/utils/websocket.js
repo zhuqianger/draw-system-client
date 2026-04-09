@@ -83,6 +83,7 @@ function doConnect() {
     stompClient.connect(
       {},
       () => {
+        const wasReconnecting = reconnectAttempts > 0
         console.log('WebSocket连接成功')
         reconnectAttempts = 0 // 重置重连次数
 
@@ -142,6 +143,11 @@ function doConnect() {
 
         // 启动心跳检测
         startHeartbeat()
+
+        // 重连成功后通知页面做一次全量兜底同步
+        if (wasReconnecting && savedCallbacks && savedCallbacks.onReconnected) {
+          savedCallbacks.onReconnected()
+        }
       },
       (error) => {
         console.error('WebSocket连接失败:', error)

@@ -927,6 +927,60 @@ const loadPoolPlayers = async () => {
   }
 }
 
+const applySystemStatusSnapshot = (status) => {
+  if (!status) return
+
+  const nextAuction = status.currentAuction || null
+  if (nextAuction) {
+    const oldStartingPrice = currentAuction.value?.startingPrice
+    const oldMaxPrice = currentAuction.value?.maxPrice
+    const oldId = currentAuction.value?.id
+    const oldEndTime = currentAuction.value?.endTime
+    const isSameAuction = oldId && nextAuction.id === oldId
+
+    if (isSameAuction) {
+      if ((nextAuction.startingPrice == null || nextAuction.startingPrice === 0) && oldStartingPrice != null && oldStartingPrice !== 0) {
+        nextAuction.startingPrice = oldStartingPrice
+      }
+      if ((nextAuction.maxPrice == null || nextAuction.maxPrice === 0) && oldMaxPrice != null && oldMaxPrice !== 0) {
+        nextAuction.maxPrice = oldMaxPrice
+      }
+
+      if (isTimeExpired && oldEndTime && nextAuction.endTime) {
+        const newEndTimeMs = new Date(nextAuction.endTime).getTime()
+        const oldEndTimeMs = new Date(oldEndTime).getTime()
+        if (newEndTimeMs <= oldEndTimeMs) {
+          currentAuction.value = nextAuction
+        } else {
+          isTimeExpired = false
+          currentAuction.value = nextAuction
+        }
+      } else {
+        currentAuction.value = nextAuction
+      }
+    } else {
+      isTimeExpired = false
+      currentAuction.value = nextAuction
+    }
+
+    if (currentAuction.value?.startingPrice) {
+      bidForm.amount = currentAuction.value.highestBidAmount
+        ? currentAuction.value.highestBidAmount + 0.5
+        : currentAuction.value.startingPrice
+    }
+    updateTimeLeft()
+  } else {
+    currentAuction.value = null
+    isTimeExpired = false
+    bidForm.amount = 0
+  }
+
+  teams.value = status.teams || []
+  poolPlayers.value = status.poolPlayers || []
+  pickRecords.value = status.pickRecords || []
+  bidHistory.value = status.currentBidHistory || []
+}
+
 const enqueueRefresh = (flags, delay = 80) => {
   if (!flags) return
 
@@ -1016,6 +1070,93 @@ const mapEventToRefreshFlags = (eventType) => {
   return { auction: true, teams: true, poolPlayers: true, pickRecords: true }
 }
 
+const applyAuctionDelta = (auctionPatch) => {
+  if (!auctionPatch) return false
+
+  if (!currentAuction.value || !currentAuction.value.id || currentAuction.value.id !== auctionPatch.id) {
+    currentAuction.value = {
+      ...(currentAuction.value || {}),
+      ...auctionPatch
+    }
+  } else {
+    currentAuction.value = {
+      ...currentAuction.value,
+      ...auctionPatch
+    }
+  }
+
+  if (currentAuction.value?.startingPrice) {
+    bidForm.amount = currentAuction.value.highestBidAmount
+      ? currentAuction.value.highestBidAmount + 0.5
+      : currentAuction.value.startingPrice
+  }
+  updateTimeLeft()
+  return true
+}
+
+const applyBidPlacedDelta = (data) => {
+  if (!data) return false
+  let applied = false
+
+  if (data.auction) {
+    applied = applyAuctionDelta(data.auction) || applied
+  }
+
+  if (data.bid && data.bid.id) {
+    const exists = bidHistory.value.some(b => b.id === data.bid.id)
+    if (!exists) {
+      bidHistory.value.unshift(data.bid)
+    }
+    applied = true
+  }
+  return applied
+}
+
+const applyPlayerAssignedDelta = (data) => {
+  if (!data) return false
+  let applied = false
+
+  if (data.team && data.team.id) {
+    const idx = teams.value.findIndex(t => t.id === data.team.id)
+    if (idx >= 0) {
+      teams.value.splice(idx, 1, data.team)
+    } else {
+      teams.value.push(data.team)
+    }
+    applied = true
+  }
+
+  if (data.poolRemovedPlayerId) {
+    poolPlayers.value = poolPlayers.value.filter(p => p.id !== data.poolRemovedPlayerId)
+    applied = true
+  }
+
+  if (data.pickRecord && data.pickRecord.id) {
+    const exists = pickRecords.value.some(r => r.id === data.pickRecord.id)
+    if (!exists) {
+      pickRecords.value.push(data.pickRecord)
+    }
+    applied = true
+  }
+  return applied
+}
+
+const applyIncrementalEvent = (event) => {
+  const data = event?.data
+  if (!data) return false
+
+  if (event.eventType === 'BID_PLACED') {
+    return applyBidPlacedDelta(data)
+  }
+  if (event.eventType === 'AUCTION_STARTED' || event.eventType === 'AUCTION_FINISHED') {
+    return applyAuctionDelta(data.auction)
+  }
+  if (event.eventType === 'PLAYER_ASSIGNED') {
+    return applyPlayerAssignedDelta(data)
+  }
+  return false
+}
+
 const handleWebSocketEvent = (event) => {
   if (!event || !event.eventType) return
 
@@ -1031,7 +1172,28 @@ const handleWebSocketEvent = (event) => {
   }
 
   recentEventTypeAt.set(event.eventType, Date.now())
+  if (event.systemStatus) {
+    applySystemStatusSnapshot(event.systemStatus)
+    return
+  }
+  if (applyIncrementalEvent(event)) {
+    return
+  }
   enqueueRefresh(mapEventToRefreshFlags(event.eventType), 80)
+}
+
+const handleWebSocketReconnected = () => {
+  // 重连后做一次全量校准，防止断线期间丢失增量事件
+  enqueueRefresh(
+    {
+      auction: true,
+      teams: true,
+      poolPlayers: true,
+      pickRecords: true,
+      bidHistory: true
+    },
+    0
+  )
 }
 
 const handleMoveToFailedPool = async (player) => {
@@ -1607,7 +1769,8 @@ onMounted(() => {
 
   // 连接WebSocket
   connectWebSocket(sessionId, {
-    onEvent: handleWebSocketEvent
+    onEvent: handleWebSocketEvent,
+    onReconnected: handleWebSocketReconnected
   })
 })
 
