@@ -802,14 +802,13 @@ const loadSessionInfo = async () => {
   }
 }
 
-const loadAuctionData = async () => {
+const loadAuctionData = async ({ refreshBidHistory = false } = {}) => {
   try {
     const res = await getCurrentAuction(sessionId)
     if (res.code === 200 && res.data) {
       // 保存旧的价格数据和其他关键数据，避免刷新时闪烁
       const oldStartingPrice = currentAuction.value?.startingPrice
       const oldMaxPrice = currentAuction.value?.maxPrice
-      const oldPlayerId = currentAuction.value?.playerId
       const oldId = currentAuction.value?.id
       const oldEndTime = currentAuction.value?.endTime
       
@@ -835,7 +834,9 @@ const loadAuctionData = async () => {
           if (newEndTimeMs <= oldEndTimeMs) {
             currentAuction.value = newData
             // 不调用updateTimeLeft，保持过期状态
-            loadBidHistory(currentAuction.value.id)
+            if (refreshBidHistory && currentAuction.value.id) {
+              await loadBidHistory(currentAuction.value.id)
+            }
             return
           } else {
             // 如果新endTime更晚（不应该发生，但作为保护），重置过期状态
@@ -866,11 +867,16 @@ const loadAuctionData = async () => {
       } else {
         updateTimeLeft() // 即使没有endTime也要更新（处理WAITING状态）
       }
-      loadBidHistory(currentAuction.value.id)
+      if (refreshBidHistory && currentAuction.value.id) {
+        await loadBidHistory(currentAuction.value.id)
+      }
     } else {
       currentAuction.value = null
       isTimeExpired = false
       bidForm.amount = 0
+      if (refreshBidHistory) {
+        bidHistory.value = []
+      }
     }
   } catch (error) {
     console.error('加载拍卖数据失败', error)
@@ -948,8 +954,7 @@ const flushRefreshQueue = async () => {
     teams: pendingRefresh.teams,
     poolPlayers: pendingRefresh.poolPlayers,
     pickRecords: pendingRefresh.pickRecords,
-    // loadAuctionData 内部已包含 loadBidHistory，避免重复请求
-    bidHistory: pendingRefresh.bidHistory && !pendingRefresh.auction
+    bidHistory: pendingRefresh.bidHistory
   }
 
   pendingRefresh.auction = false
@@ -961,13 +966,13 @@ const flushRefreshQueue = async () => {
   refreshInFlight = true
   try {
     const tasks = []
-    if (plan.auction) tasks.push(loadAuctionData())
+    if (plan.auction) tasks.push(loadAuctionData({ refreshBidHistory: plan.bidHistory }))
     if (plan.teams) tasks.push(loadTeams())
     if (plan.poolPlayers) tasks.push(loadPoolPlayers())
     if (plan.pickRecords) tasks.push(loadPickRecords())
     await Promise.all(tasks)
 
-    if (plan.bidHistory && currentAuction.value?.id) {
+    if (!plan.auction && plan.bidHistory && currentAuction.value?.id) {
       await loadBidHistory(currentAuction.value.id)
     }
   } finally {
@@ -996,7 +1001,7 @@ const scheduleFallbackRefresh = (expectedEventTypes, flags, delay = 1200) => {
 
 const mapEventToRefreshFlags = (eventType) => {
   if (eventType === 'BID_PLACED') {
-    return { auction: true, teams: true }
+    return { auction: true, teams: true, bidHistory: true }
   }
   if (eventType === 'AUCTION_STARTED' || eventType === 'AUCTION_FINISHED') {
     return { auction: true, teams: true, poolPlayers: true }
@@ -1222,7 +1227,7 @@ const handleBid = async () => {
         ElMessage.success('出价成功')
       }
       bidForm.amount = 0
-      scheduleFallbackRefresh(['BID_PLACED'], { auction: true, teams: true })
+      scheduleFallbackRefresh(['BID_PLACED'], { auction: true, teams: true, bidHistory: true })
     } else {
       ElMessage.error(res.message || '出价失败')
     }
@@ -1595,7 +1600,7 @@ const handleRollback = async (record) => {
 
 onMounted(() => {
   loadSessionInfo()
-  loadAuctionData()
+  loadAuctionData({ refreshBidHistory: true })
   loadTeams()
   loadPoolPlayers()
   loadPickRecords()
