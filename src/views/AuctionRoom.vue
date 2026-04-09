@@ -596,6 +596,16 @@ const pendingRefresh = {
 }
 const recentEventTypeAt = new Map()
 const recentEventIds = new Set()
+const recentActionEventAt = new Map()
+const pendingActionRefresh = new Map()
+const lastSessionVersion = ref(0)
+
+const createActionId = () => {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
 
 const userInfo = computed(() => {
   const info = sessionStorage.getItem('userInfo')
@@ -1043,10 +1053,29 @@ const flushRefreshQueue = async () => {
   }
 }
 
-const scheduleFallbackRefresh = (expectedEventTypes, flags, delay = 1200) => {
-  const startAt = Date.now()
+const scheduleFallbackRefresh = (expectedEventTypes, flags, delay = 1200, options = {}) => {
+  const startAt = options.startAt || Date.now()
+  const actionId = options.actionId || null
+  const expectedSet = new Set(expectedEventTypes || [])
+
+  if (actionId) {
+    pendingActionRefresh.set(actionId, {
+      expectedSet,
+      startAt
+    })
+  }
+
   setTimeout(() => {
-    const hasExpectedEvent = expectedEventTypes.some(type => (recentEventTypeAt.get(type) || 0) >= startAt)
+    let hasExpectedEvent = expectedEventTypes.some(type => (recentEventTypeAt.get(type) || 0) >= startAt)
+
+    if (actionId) {
+      const pending = pendingActionRefresh.get(actionId)
+      const actionEventAt = recentActionEventAt.get(actionId) || 0
+      const matchedByAction = !!pending?.matched || actionEventAt >= startAt
+      hasExpectedEvent = hasExpectedEvent || matchedByAction
+      pendingActionRefresh.delete(actionId)
+    }
+
     if (!hasExpectedEvent) {
       enqueueRefresh(flags, 0)
     }
@@ -1210,13 +1239,18 @@ const applyPlayerRemovedFromTeamDelta = (data) => {
   return applied
 }
 
-const applyRollbackCompletedDelta = (data) => {
-  if (!data?.systemStatus) return false
-  applySystemStatusSnapshot(data.systemStatus)
+const applyRollbackCompletedDelta = (event) => {
+  const snapshot = event?.systemStatus || event?.data?.systemStatus
+  if (!snapshot) return false
+  applySystemStatusSnapshot(snapshot)
   return true
 }
 
 const applyIncrementalEvent = (event) => {
+  if (event?.eventType === 'ROLLBACK_COMPLETED') {
+    return applyRollbackCompletedDelta(event)
+  }
+
   const data = event?.data
   if (!data) return false
 
@@ -1238,9 +1272,6 @@ const applyIncrementalEvent = (event) => {
   if (event.eventType === 'PLAYER_REMOVED_FROM_TEAM') {
     return applyPlayerRemovedFromTeamDelta(data)
   }
-  if (event.eventType === 'ROLLBACK_COMPLETED') {
-    return applyRollbackCompletedDelta(data)
-  }
   return false
 }
 
@@ -1259,6 +1290,40 @@ const handleWebSocketEvent = (event) => {
   }
 
   recentEventTypeAt.set(event.eventType, Date.now())
+
+  if (event.actionId) {
+    recentActionEventAt.set(event.actionId, Date.now())
+    if (recentActionEventAt.size > 500) {
+      const oldestActionId = recentActionEventAt.keys().next().value
+      if (oldestActionId) {
+        recentActionEventAt.delete(oldestActionId)
+      }
+    }
+    const pending = pendingActionRefresh.get(event.actionId)
+    if (pending && pending.expectedSet.has(event.eventType)) {
+      pending.matched = true
+    }
+  }
+
+  if (event.sessionVersion != null) {
+    const incomingVersion = Number(event.sessionVersion)
+    if (!Number.isNaN(incomingVersion) && incomingVersion > 0) {
+      if (lastSessionVersion.value > 0 && incomingVersion > lastSessionVersion.value + 1) {
+        // 发现版本跳跃，认为有事件丢失，立即做一次全量同步
+        lastSessionVersion.value = incomingVersion
+        enqueueRefresh(
+          { auction: true, teams: true, poolPlayers: true, pickRecords: true, bidHistory: true },
+          0
+        )
+        return
+      }
+      if (lastSessionVersion.value > 0 && incomingVersion < lastSessionVersion.value) {
+        return
+      }
+      lastSessionVersion.value = incomingVersion
+    }
+  }
+
   if (event.systemStatus) {
     applySystemStatusSnapshot(event.systemStatus)
     return
@@ -1285,15 +1350,17 @@ const handleWebSocketReconnected = () => {
 
 const handleMoveToFailedPool = async (player) => {
   poolMovingId.value = player.id
+  const actionId = createActionId()
+  const requestStartAt = Date.now()
   try {
     const res = await changePlayerPool({
       sessionId: Number(sessionId),
       playerId: player.id,
       targetPoolType: 'FAILED'
-    })
+    }, { actionId })
     if (res.code === 200) {
       ElMessage.success('已移至流拍池')
-      scheduleFallbackRefresh(['PLAYER_POOL_CHANGED'], { poolPlayers: true })
+      scheduleFallbackRefresh(['PLAYER_POOL_CHANGED'], { poolPlayers: true }, 1200, { startAt: requestStartAt, actionId })
     } else {
       ElMessage.error(res.message || '操作失败')
     }
@@ -1306,15 +1373,17 @@ const handleMoveToFailedPool = async (player) => {
 
 const handleMoveToNormalPool = async (player) => {
   poolMovingId.value = player.id
+  const actionId = createActionId()
+  const requestStartAt = Date.now()
   try {
     const res = await changePlayerPool({
       sessionId: Number(sessionId),
       playerId: player.id,
       targetPoolType: 'NORMAL'
-    })
+    }, { actionId })
     if (res.code === 200) {
       ElMessage.success('已移回普通池')
-      scheduleFallbackRefresh(['PLAYER_POOL_CHANGED'], { poolPlayers: true })
+      scheduleFallbackRefresh(['PLAYER_POOL_CHANGED'], { poolPlayers: true }, 1200, { startAt: requestStartAt, actionId })
     } else {
       ElMessage.error(res.message || '操作失败')
     }
@@ -1339,10 +1408,17 @@ const handleRandomDraw = async () => {
       return
     }
 
-    const res = await createAuction(sessionId, selectedPlayer.id)
+    const actionId = createActionId()
+    const requestStartAt = Date.now()
+    const res = await createAuction(sessionId, selectedPlayer.id, { actionId })
     if (res.code === 200) {
       ElMessage.success(`已抽取：${selectedPlayer.groupName || selectedPlayer.gameId}，等待开始拍卖`)
-      scheduleFallbackRefresh(['AUCTION_STARTED'], { auction: true, poolPlayers: true, teams: true })
+      scheduleFallbackRefresh(
+        ['AUCTION_STARTED'],
+        { auction: true, poolPlayers: true, teams: true },
+        1200,
+        { startAt: requestStartAt, actionId }
+      )
     } else {
       ElMessage.error(res.message || '摇号失败')
     }
@@ -1358,10 +1434,17 @@ const handleBeginAuction = async () => {
   
   beginning.value = true
   try {
-    const res = await beginAuction(currentAuction.value.id)
+    const actionId = createActionId()
+    const requestStartAt = Date.now()
+    const res = await beginAuction(currentAuction.value.id, { actionId })
     if (res.code === 200) {
       ElMessage.success('拍卖已开始')
-      scheduleFallbackRefresh(['AUCTION_STARTED'], { auction: true, teams: true, poolPlayers: true })
+      scheduleFallbackRefresh(
+        ['AUCTION_STARTED'],
+        { auction: true, teams: true, poolPlayers: true },
+        1200,
+        { startAt: requestStartAt, actionId }
+      )
     } else {
       ElMessage.error(res.message || '开始拍卖失败')
     }
@@ -1378,19 +1461,26 @@ const handleFinishAuction = async () => {
   
   finishing.value = true
   try {
-    const res = await finishAuction(currentAuction.value.id, false) // autoFinish=false，管理员手动结束
+    const actionId = createActionId()
+    const requestStartAt = Date.now()
+    const res = await finishAuction(currentAuction.value.id, false, { actionId }) // autoFinish=false，管理员手动结束
     if (res.code === 200) {
       if (res.message && res.message.includes('捡漏环节')) {
         ElMessage.success('第一阶段结束，进入捡漏环节')
       } else {
         ElMessage.success('拍卖已结束')
       }
-      scheduleFallbackRefresh(['AUCTION_FINISHED', 'AUCTION_STARTED'], {
-        auction: true,
-        teams: true,
-        poolPlayers: true,
-        pickRecords: true
-      })
+      scheduleFallbackRefresh(
+        ['AUCTION_FINISHED', 'AUCTION_STARTED'],
+        {
+          auction: true,
+          teams: true,
+          poolPlayers: true,
+          pickRecords: true
+        },
+        1200,
+        { startAt: requestStartAt, actionId }
+      )
     } else {
       ElMessage.error(res.message || '结束拍卖失败')
     }
@@ -1419,7 +1509,8 @@ const handleRedraw = async () => {
   try {
     const prevPlayerId = currentAuction.value.playerId
     // 结束当前未开始的拍卖，把该队员放回待拍卖池
-    const resFinish = await finishAuction(currentAuction.value.id, false)
+    const finishActionId = createActionId()
+    const resFinish = await finishAuction(currentAuction.value.id, false, { actionId: finishActionId })
     if (resFinish.code !== 200) {
       ElMessage.error(resFinish.message || '结束当前拍卖失败，无法重新抽选')
       return
@@ -1440,10 +1531,17 @@ const handleRedraw = async () => {
       return
     }
 
-    const resCreate = await createAuction(sessionId, selectedPlayer.id)
+    const createActionIdForRedraw = createActionId()
+    const createStartAt = Date.now()
+    const resCreate = await createAuction(sessionId, selectedPlayer.id, { actionId: createActionIdForRedraw })
     if (resCreate.code === 200) {
       ElMessage.success(`已重新抽选：${selectedPlayer.groupName || selectedPlayer.gameId || '未知'}，等待开始拍卖`)
-      scheduleFallbackRefresh(['AUCTION_STARTED'], { auction: true, poolPlayers: true, teams: true })
+      scheduleFallbackRefresh(
+        ['AUCTION_STARTED'],
+        { auction: true, poolPlayers: true, teams: true },
+        1200,
+        { startAt: createStartAt, actionId: createActionIdForRedraw }
+      )
     } else {
       ElMessage.error(resCreate.message || '重新抽选失败')
       await loadAuctionData()
@@ -1464,10 +1562,12 @@ const handleBid = async () => {
 
   bidding.value = true
   try {
+    const actionId = createActionId()
+    const requestStartAt = Date.now()
     const res = await placeBid({
       auctionId: currentAuction.value.id,
       amount: bidForm.amount
-    })
+    }, { actionId })
     if (res.code === 200) {
       // 出价成功
       if (currentAuction.value.maxPrice && bidForm.amount >= currentAuction.value.maxPrice) {
@@ -1476,7 +1576,12 @@ const handleBid = async () => {
         ElMessage.success('出价成功')
       }
       bidForm.amount = 0
-      scheduleFallbackRefresh(['BID_PLACED'], { auction: true, bidHistory: true })
+      scheduleFallbackRefresh(
+        ['BID_PLACED'],
+        { auction: true, bidHistory: true },
+        1200,
+        { startAt: requestStartAt, actionId }
+      )
     } else {
       ElMessage.error(res.message || '出价失败')
     }
@@ -1689,14 +1794,16 @@ const handleUpdateCostConfirm = async () => {
 
   updatingCost.value = true
   try {
+    const actionId = createActionId()
+    const requestStartAt = Date.now()
     const res = await updateTeamCost({
       teamId: updateCostForm.teamId,
       nowCost: value
-    })
+    }, { actionId })
     if (res.code === 200) {
       ElMessage.success(res.message || '队伍费用已更新')
       updateCostDialogVisible.value = false
-      scheduleFallbackRefresh(['TEAM_COST_UPDATED'], { teams: true })
+      scheduleFallbackRefresh(['TEAM_COST_UPDATED'], { teams: true }, 1200, { startAt: requestStartAt, actionId })
     } else {
       ElMessage.error(res.message || '更新失败')
     }
@@ -1739,20 +1846,27 @@ const handleAssignConfirm = async () => {
 
   assigning.value = true
   try {
+    const actionId = createActionId()
+    const requestStartAt = Date.now()
     const res = await assignPlayerToTeam({
       playerId: assignForm.playerId,
       teamId: assignForm.teamId,
       amount
-    })
+    }, { actionId })
     if (res.code === 200) {
       ElMessage.success(res.message || '分配成功')
       assignDialogVisible.value = false
-      scheduleFallbackRefresh(['PLAYER_ASSIGNED'], {
-        auction: true,
-        teams: true,
-        poolPlayers: true,
-        pickRecords: true
-      })
+      scheduleFallbackRefresh(
+        ['PLAYER_ASSIGNED'],
+        {
+          auction: true,
+          teams: true,
+          poolPlayers: true,
+          pickRecords: true
+        },
+        1200,
+        { startAt: requestStartAt, actionId }
+      )
     } else {
       ElMessage.error(res.message || '分配失败')
     }
@@ -1786,17 +1900,24 @@ const handleTeamPlayerClick = async (team, player) => {
   }
 
   try {
+    const actionId = createActionId()
+    const requestStartAt = Date.now()
     const res = await removePlayerFromTeam({
       teamId: team.id,
       playerId: player.id
-    })
+    }, { actionId })
     if (res.code === 200) {
       ElMessage.success(res.message || '已移除队员')
-      scheduleFallbackRefresh(['PLAYER_REMOVED_FROM_TEAM'], {
-        teams: true,
-        poolPlayers: true,
-        pickRecords: true
-      })
+      scheduleFallbackRefresh(
+        ['PLAYER_REMOVED_FROM_TEAM'],
+        {
+          teams: true,
+          poolPlayers: true,
+          pickRecords: true
+        },
+        1200,
+        { startAt: requestStartAt, actionId }
+      )
     } else {
       ElMessage.error(res.message || '移除失败')
     }
@@ -1827,16 +1948,23 @@ const handleRollback = async (record) => {
 
   rollingBack.value = true
   try {
-    const res = await rollbackByPickRecord(record.id)
+    const actionId = createActionId()
+    const requestStartAt = Date.now()
+    const res = await rollbackByPickRecord(record.id, { actionId })
     if (res.code === 200) {
       ElMessage.success(res.message || '回退成功')
-      scheduleFallbackRefresh(['ROLLBACK_COMPLETED'], {
-        auction: true,
-        teams: true,
-        poolPlayers: true,
-        pickRecords: true,
-        bidHistory: true
-      })
+      scheduleFallbackRefresh(
+        ['ROLLBACK_COMPLETED'],
+        {
+          auction: true,
+          teams: true,
+          poolPlayers: true,
+          pickRecords: true,
+          bidHistory: true
+        },
+        1200,
+        { startAt: requestStartAt, actionId }
+      )
     } else {
       ElMessage.error(res.message || '回退失败')
     }

@@ -1,10 +1,12 @@
 import request from './request'
 
-export const placeBid = (data) => {
+export const placeBid = (data, options = {}) => {
+  const { actionId } = options
   return request({
     url: '/auction/bid',
     method: 'post',
-    data
+    data,
+    actionId
   })
 }
 
@@ -24,34 +26,42 @@ export const getBids = (auctionId, options = {}) => {
   })
 }
 
-export const createAuction = (sessionId, playerId) => {
+export const createAuction = (sessionId, playerId, options = {}) => {
+  const { actionId } = options
   return request({
     url: '/auction/create',
     method: 'post',
-    params: { sessionId, playerId }
+    params: { sessionId, playerId },
+    actionId
   })
 }
 
-export const beginAuction = (auctionId) => {
+export const beginAuction = (auctionId, options = {}) => {
+  const { actionId } = options
   return request({
     url: `/auction/begin/${auctionId}`,
-    method: 'post'
+    method: 'post',
+    actionId
   })
 }
 
-export const startAuction = (sessionId, playerId, duration = 60) => {
+export const startAuction = (sessionId, playerId, duration = 60, options = {}) => {
+  const { actionId } = options
   return request({
     url: '/auction/start',
     method: 'post',
-    params: { sessionId, playerId, duration }
+    params: { sessionId, playerId, duration },
+    actionId
   })
 }
 
-export const finishAuction = (auctionId, autoFinish = false) => {
+export const finishAuction = (auctionId, autoFinish = false, options = {}) => {
+  const { actionId } = options
   return request({
     url: `/auction/finish/${auctionId}`,
     method: 'post',
-    params: { autoFinish }
+    params: { autoFinish },
+    actionId
   })
 }
 
@@ -63,9 +73,11 @@ export const getPickRecords = (sessionId) => {
   })
 }
 
-export const rollbackByPickRecord = (recordId) => {
+export const rollbackByPickRecord = (recordId, options = {}) => {
+  const { actionId } = options
   return request({
     url: `/auction/rollback/${recordId}`,
-    method: 'post'
+    method: 'post',
+    actionId
   })
 }

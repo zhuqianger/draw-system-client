@@ -1,10 +1,12 @@
 import request from './request'
 
-export const createSession = (formData) => {
+export const createSession = (formData, options = {}) => {
+  const { actionId } = options
   return request({
     url: '/session/create',
     method: 'post',
     data: formData,
+    actionId,
     headers: {
       'Content-Type': 'multipart/form-data'
     }
@@ -25,16 +27,20 @@ export const getSession = (sessionId) => {
   })
 }
 
-export const activateSession = (sessionId) => {
+export const activateSession = (sessionId, options = {}) => {
+  const { actionId } = options
   return request({
     url: `/session/${sessionId}/activate`,
-    method: 'post'
+    method: 'post',
+    actionId
   })
 }
 
-export const deleteSession = (sessionId) => {
+export const deleteSession = (sessionId, options = {}) => {
+  const { actionId } = options
   return request({
     url: `/session/${sessionId}`,
-    method: 'delete'
+    method: 'delete',
+    actionId
   })
 }

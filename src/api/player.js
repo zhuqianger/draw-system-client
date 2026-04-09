@@ -22,34 +22,42 @@ export const exportTeams = (sessionId) => {
   })
 }
 
-export const assignPlayerToTeam = (data) => {
+export const assignPlayerToTeam = (data, options = {}) => {
+  const { actionId } = options
   return request({
     url: '/player/assign',
     method: 'post',
-    data
+    data,
+    actionId
   })
 }
 
-export const updateTeamCost = (data) => {
+export const updateTeamCost = (data, options = {}) => {
+  const { actionId } = options
   return request({
     url: '/team/updateCost',
     method: 'post',
-    data
+    data,
+    actionId
   })
 }
 
-export const removePlayerFromTeam = (data) => {
+export const removePlayerFromTeam = (data, options = {}) => {
+  const { actionId } = options
   return request({
     url: '/team/removePlayer',
     method: 'post',
-    data
+    data,
+    actionId
   })
 }
 
-export const changePlayerPool = (data) => {
+export const changePlayerPool = (data, options = {}) => {
+  const { actionId } = options
   return request({
     url: '/player/pool/change',
     method: 'post',
-    data
+    data,
+    actionId
   })
 }

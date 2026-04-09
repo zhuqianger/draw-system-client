@@ -8,10 +8,19 @@ const request = axios.create({
 // 请求拦截器
 request.interceptors.request.use(
   config => {
+    if (!config.headers) {
+      config.headers = {}
+    }
+
     const token = sessionStorage.getItem('token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
+
+    if (config.actionId) {
+      config.headers['X-Action-Id'] = config.actionId
+    }
+
     return config
   },
   error => {
