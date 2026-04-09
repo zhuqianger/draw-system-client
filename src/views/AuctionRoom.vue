@@ -1001,7 +1001,7 @@ const scheduleFallbackRefresh = (expectedEventTypes, flags, delay = 1200) => {
 
 const mapEventToRefreshFlags = (eventType) => {
   if (eventType === 'BID_PLACED') {
-    return { auction: true, teams: true, bidHistory: true }
+    return { auction: true, bidHistory: true }
   }
   if (eventType === 'AUCTION_STARTED' || eventType === 'AUCTION_FINISHED') {
     return { auction: true, teams: true, poolPlayers: true }
@@ -1227,7 +1227,7 @@ const handleBid = async () => {
         ElMessage.success('出价成功')
       }
       bidForm.amount = 0
-      scheduleFallbackRefresh(['BID_PLACED'], { auction: true, teams: true, bidHistory: true })
+      scheduleFallbackRefresh(['BID_PLACED'], { auction: true, bidHistory: true })
     } else {
       ElMessage.error(res.message || '出价失败')
     }

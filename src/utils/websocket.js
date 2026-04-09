@@ -12,7 +12,7 @@ let isManualDisconnect = false // 标记是否为手动断开
 let reconnectAttempts = 0 // 重连尝试次数
 const RECONNECT_DELAY = 1000 // 1秒后重连
 const MAX_RECONNECT_ATTEMPTS = 10 // 最大重连次数
-const HEARTBEAT_INTERVAL = 1000 // 心跳间隔1s
+const HEARTBEAT_INTERVAL = 2000 // 本地连接巡检间隔2s
 
 /**
  * 连接WebSocket
@@ -62,9 +62,9 @@ function doConnect() {
     // 禁用调试信息
     stompClient.debug = () => {}
 
-    // 设置连接超时
-    stompClient.heartbeat.outgoing = 1000 // 3秒发送一次心跳
-    stompClient.heartbeat.incoming = 1000 // 3秒接收一次心跳
+    // STOMP心跳：3秒发送/接收一次
+    stompClient.heartbeat.outgoing = 3000
+    stompClient.heartbeat.incoming = 3000
 
     // 监听socket连接错误
     socket.onerror = (error) => {

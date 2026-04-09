@@ -15,10 +15,12 @@ export const getCurrentAuction = (sessionId) => {
   })
 }
 
-export const getBids = (auctionId) => {
+export const getBids = (auctionId, options = {}) => {
+  const { lite = true } = options
   return request({
     url: `/auction/${auctionId}/bids`,
-    method: 'get'
+    method: 'get',
+    params: { lite }
   })
 }
 
