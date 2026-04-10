@@ -1114,6 +1114,18 @@ const mapEventToRefreshFlags = (eventType) => {
 const applyAuctionDelta = (auctionPatch) => {
   if (!auctionPatch) return false
 
+  // 彻底结束（非进入捡漏等中间态）：当前无进行中拍卖，应收起卡片并显示「摇号抽取」
+  if (auctionPatch.status === 'FINISHED') {
+    currentAuction.value = null
+    isTimeExpired = false
+    bidForm.amount = 0
+    enqueueRefresh(
+      { auction: true, teams: true, poolPlayers: true, pickRecords: true, bidHistory: true },
+      80
+    )
+    return true
+  }
+
   if (!currentAuction.value || !currentAuction.value.id || currentAuction.value.id !== auctionPatch.id) {
     currentAuction.value = {
       ...(currentAuction.value || {}),
@@ -1470,6 +1482,17 @@ const handleFinishAuction = async () => {
       } else {
         ElMessage.success('拍卖已结束')
       }
+      // 接口已成功结束拍卖：立即拉取当前拍卖/队伍/池子，避免仅依赖 WS 时增量分支跳过 enqueue 导致界面卡在已结束卡片
+      enqueueRefresh(
+        {
+          auction: true,
+          teams: true,
+          poolPlayers: true,
+          pickRecords: true,
+          bidHistory: true
+        },
+        0
+      )
       scheduleFallbackRefresh(
         ['AUCTION_FINISHED', 'AUCTION_STARTED'],
         {
