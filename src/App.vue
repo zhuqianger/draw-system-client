@@ -1,8 +1,10 @@
 <template>
   <router-view />
+  <SupportWidget />
 </template>
 
 <script setup>
+import SupportWidget from './components/SupportWidget.vue'
 </script>
 
 <style>
